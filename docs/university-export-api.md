@@ -1,62 +1,98 @@
-# CIEL PK University Export API (v1)
+# CIEL PK University Export API v1
 
-For a university's own systems (ERP / student information system, LMS, data warehouse) to pull
-the university's CIEL PK records: students, opportunities, verified community-service hours,
-approved FYPs, approved ventures and a period summary. Read-only. One protocol for every
-university, shared with the Integration Hub vendor API (same signing, same credentials).
+Read-only pull of a university's CIEL PK records into its own systems (ERP / SIS / LMS / warehouse).
 
-Base URL: `https://cielbackend-ecru.vercel.app/api/integrations/v1/export`
+| | |
+| --- | --- |
+| Base URL | `https://cielbackend-ecru.vercel.app/api/integrations/v1/export` |
+| Protocol | HTTPS, `GET` only, JSON responses |
+| Auth | HMAC-SHA256 request signing (same as the CIEL PK vendor API) |
+| Paging | opaque cursor, max 500 rows per page |
+| Rate limit | 120 requests / min per platform; `summary` 6 / min |
 
-What the university receives from CIEL PK:
+## Credentials
 
-| Item | Example | Where it comes from |
-| --- | --- | --- |
-| Key id | `hk_3f9c…` | issued per platform by CIEL PK admin (Admin → Integrations → Platforms) |
-| Secret | shown once at issuance | keep it server-side, never in a browser or app |
-| Connection id | UUID | the connection between the platform and the university organization |
-| Scopes | `export:students`, … | granted on the platform and on the connection |
+Issued by CIEL PK admin. Keep the secret server-side.
 
-Approval flow, in order:
+| Item | Format |
+| --- | --- |
+| `KEY_ID` | `hk_…` |
+| `SECRET` | shown once at issuance |
+| `CONNECTION_ID` | UUID of the platform → university connection |
+| Scopes | `export:students` `export:opportunities` `export:community-service` `export:fyp` `export:ventures` `export:summary` |
 
-1. CIEL PK admin registers a platform for the university's system (for example "BNU ERP"), ticks
-   the export scopes under **Approved capabilities**, and issues a credential.
-2. CIEL PK admin proposes a connection to the university organization with the export scopes.
-3. The university approves the connection from its dashboard (**Integrations**).
-4. CIEL PK admin authorizes it. From then on the endpoints below answer.
+Activation: CIEL PK registers the platform and proposes the connection → university approves it in its dashboard (Integrations) → CIEL PK authorizes it.
 
-Personal fields (student email and phone, supervisor email) are included only when the
-connection's **personal fields** switch is on **and the platform is live**. A sandbox platform
-never receives personal fields, whatever the connection says, so wiring can be tested against real
-rows without personal data leaving. Otherwise the keys are absent (not blank). The registration
-number is always included because it is the matching key on the university side.
+## Signing
 
----
-
-## 1. Signing every request
-
-Identical to the vendor API. Every call carries four headers:
+Headers on every request:
 
 | Header | Value |
 | --- | --- |
-| `X-Hub-Key-Id` | your key id |
-| `X-Hub-Timestamp` | current unix time in seconds; must be within ±300 s of server time |
-| `X-Hub-Nonce` | random string, 16–64 chars of `A-Z a-z 0-9 _ - : .`, unique per request |
-| `X-Hub-Signature` | `v1=` + hex HMAC-SHA256 of the canonical string, keyed with your secret |
+| `X-Hub-Key-Id` | `KEY_ID` |
+| `X-Hub-Timestamp` | unix seconds, within ±300 s of server time |
+| `X-Hub-Nonce` | 16–64 chars `[A-Za-z0-9_-:.]`, unique per request |
+| `X-Hub-Signature` | `v1=` + hex HMAC-SHA256(`SECRET`, canonical) |
 
-Canonical string (five newlines, no trailing newline):
+Canonical string (newline-separated, no trailing newline):
 
 ```
-v1\n
-GET\n
-<path without query string, e.g. /api/integrations/v1/export/students>\n
-<timestamp>\n
-<nonce>\n
-<sha256 hex of the empty string: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855>
+v1
+GET
+/api/integrations/v1/export/<resource>
+<timestamp>
+<nonce>
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
-All export calls are `GET` with no body, so the body hash is always the hash of the empty string.
-The query string is **not** part of the signature; it is protected by TLS, and the timestamp plus
-single-use nonce stop a captured request from being replayed. Always call over `https://`.
+Line 3 is the path only (no query string). Line 6 is the SHA-256 of an empty body, constant for every export call.
+
+### PHP
+
+```php
+<?php
+const BASE = 'https://cielbackend-ecru.vercel.app';
+const EMPTY_SHA = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+function signHeaders(string $path): array {
+    $ts = (string) time();
+    $nonce = bin2hex(random_bytes(16));
+    $canonical = implode("\n", ['v1', 'GET', $path, $ts, $nonce, EMPTY_SHA]);
+    $sig = hash_hmac('sha256', $canonical, getenv('CIEL_SECRET'));
+    return [
+        'X-Hub-Key-Id: ' . getenv('CIEL_KEY_ID'),
+        'X-Hub-Timestamp: ' . $ts,
+        'X-Hub-Nonce: ' . $nonce,
+        'X-Hub-Signature: v1=' . $sig,
+    ];
+}
+
+function fetchAll(string $resource, string $connectionId, array $extra = []): Generator {
+    $path = "/api/integrations/v1/export/$resource";
+    $cursor = null;
+    do {
+        $q = ['connection_id' => $connectionId, 'limit' => 500] + $extra;
+        if ($cursor) $q['cursor'] = $cursor;
+        $ch = curl_init(BASE . $path . '?' . http_build_query($q));
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => signHeaders($path),
+            CURLOPT_TIMEOUT => 60,
+        ]);
+        $raw = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($status !== 200) throw new RuntimeException("$status $raw");
+        $body = json_decode($raw, true);
+        foreach ($body['rows'] as $row) yield $row;
+        $cursor = $body['page']['next_cursor'];   // persist after each page
+    } while ($body['page']['has_more']);
+}
+
+foreach (fetchAll('students', getenv('CIEL_CONNECTION_ID')) as $s) {
+    echo $s['registration_number'], ' ', $s['student_name'], PHP_EOL;
+}
+```
 
 ### Python
 
@@ -64,33 +100,26 @@ single-use nonce stop a captured request from being replayed. Always call over `
 import hashlib, hmac, os, time, requests
 
 BASE = "https://cielbackend-ecru.vercel.app"
-KEY_ID = os.environ["CIEL_KEY_ID"]
-SECRET = os.environ["CIEL_SECRET"]
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
 
-def sign(path: str) -> dict:
-    ts = str(int(time.time()))
-    nonce = os.urandom(16).hex()
+def sign(path):
+    ts, nonce = str(int(time.time())), os.urandom(16).hex()
     canonical = "\n".join(["v1", "GET", path, ts, nonce, EMPTY_SHA])
-    sig = hmac.new(SECRET.encode(), canonical.encode(), hashlib.sha256).hexdigest()
-    return {"X-Hub-Key-Id": KEY_ID, "X-Hub-Timestamp": ts, "X-Hub-Nonce": nonce, "X-Hub-Signature": f"v1={sig}"}
+    sig = hmac.new(os.environ["CIEL_SECRET"].encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    return {"X-Hub-Key-Id": os.environ["CIEL_KEY_ID"], "X-Hub-Timestamp": ts,
+            "X-Hub-Nonce": nonce, "X-Hub-Signature": f"v1={sig}"}
 
-def fetch_all(resource: str, connection_id: str, cursor: str | None = None, **params):
-    path = f"/api/integrations/v1/export/{resource}"
+def fetch_all(resource, connection_id, **params):
+    path, cursor = f"/api/integrations/v1/export/{resource}", None
     while True:
         q = {"connection_id": connection_id, "limit": 500, **params}
-        if cursor:
-            q["cursor"] = cursor
+        if cursor: q["cursor"] = cursor
         r = requests.get(BASE + path, params=q, headers=sign(path), timeout=60)
         r.raise_for_status()
         body = r.json()
         yield from body["rows"]
-        cursor = body["page"]["next_cursor"]       # store this after each page
-        if not body["page"]["has_more"]:
-            return
-
-for row in fetch_all("students", "<connection uuid>"):
-    print(row["registration_number"], row["student_name"])
+        cursor = body["page"]["next_cursor"]
+        if not body["page"]["has_more"]: return
 ```
 
 ### Node.js
@@ -105,7 +134,8 @@ function sign(path) {
   const nonce = crypto.randomBytes(16).toString("hex");
   const canonical = ["v1", "GET", path, ts, nonce, EMPTY_SHA].join("\n");
   const sig = crypto.createHmac("sha256", process.env.CIEL_SECRET).update(canonical).digest("hex");
-  return { "X-Hub-Key-Id": process.env.CIEL_KEY_ID, "X-Hub-Timestamp": ts, "X-Hub-Nonce": nonce, "X-Hub-Signature": `v1=${sig}` };
+  return { "X-Hub-Key-Id": process.env.CIEL_KEY_ID, "X-Hub-Timestamp": ts,
+           "X-Hub-Nonce": nonce, "X-Hub-Signature": `v1=${sig}` };
 }
 
 async function* fetchAll(resource, connectionId, extra = {}) {
@@ -124,25 +154,18 @@ async function* fetchAll(resource, connectionId, extra = {}) {
 }
 ```
 
----
+## Paging
 
-## 2. Paging and incremental sync
+Query parameters on every list endpoint:
 
-Every list endpoint takes:
+| Param | Required | Description |
+| --- | --- | --- |
+| `connection_id` | yes | UUID |
+| `limit` | no | 1–500, default 200 |
+| `cursor` | no | `page.next_cursor` from the previous page |
+| `updated_since` | no | `YYYY-MM-DD` or ISO date-time; rows changed at or after it |
 
-| Query | Meaning |
-| --- | --- |
-| `connection_id` | required: your connection to the university |
-| `limit` | rows per page, 1–500 (default 200) |
-| `cursor` | the `page.next_cursor` of the previous page; opaque |
-| `updated_since` | `YYYY-MM-DD` or ISO date-time: only rows changed at or after this instant |
-
-Rows are ordered by `updated_at` then `id`. For a nightly sync: store the last `next_cursor` you
-received, and start the next run from it. A row is never skipped; after a crash at worst a row is
-repeated, so upsert by the row id (`id` or `record_id`) and the registration number.
-
-A page may contain fewer rows than `limit` even when `has_more` is true (some sources are
-filtered after the database read). Keep paging until `has_more` is `false`.
+Order: `updated_at`, then `id`. Store the last `next_cursor`; start the next run from it. Rows are never skipped; after a crash a row may repeat, so upsert on `id` / `record_id`. A page may hold fewer than `limit` rows while `has_more` is true; loop until `has_more` is false.
 
 Response envelope:
 
@@ -152,91 +175,117 @@ Response envelope:
   "schema_version": "1.0",
   "scope": "export:students",
   "connection_id": "…",
-  "organization": { "id": "…", "name": "Beaconhouse National University (BNU)" },
+  "organization": { "id": "…", "name": "…" },
   "personal_fields": false,
-  "rows": [ … ],
-  "page": { "limit": 200, "count": 200, "next_cursor": "eyJ1Ijoi…", "has_more": true }
+  "rows": [],
+  "page": { "limit": 200, "count": 200, "next_cursor": "…", "has_more": true }
 }
 ```
 
----
+## Personal fields
 
-## 3. Endpoints
+`email`, `phone` and supervisor `email` are present only when the connection's personal-fields flag is on **and** the platform is live. Sandbox never returns them. Absent means the key is missing, not null. `registration_number` is always present.
 
-### `GET /students` — scope `export:students`
+## Endpoints
 
-Students affiliated with the university: linked to its organization account, or whose profile
-names it. Only students (no faculty or staff).
+### GET /students — `export:students`
 
-| Field | Notes |
+Students affiliated with the university (linked account, or profile names it). Students only.
+
+| Field | Type |
 | --- | --- |
-| `id` | CIEL PK user id (stable) |
-| `registration_number` | as entered by the student / roster |
-| `student_name`, `department`, `programme`, `enrollment_year` | profile fields |
-| `university`, `institution`, `city` | profile fields |
-| `account_status`, `profile_verified`, `identity_verified` | CIEL PK verification state |
-| `linked_to_university_account` | true when the account is formally linked to the university |
-| `email`, `phone` | only with personal fields |
-| `created_at`, `updated_at` | ISO |
+| `id` | uuid |
+| `registration_number` | string \| null |
+| `student_name` `department` `programme` `enrollment_year` | string \| null |
+| `university` `institution` `city` | string \| null |
+| `account_status` | string |
+| `profile_verified` `identity_verified` `linked_to_university_account` | boolean |
+| `email` `phone` | string \| null (personal) |
+| `created_at` `updated_at` | ISO |
 
-### `GET /opportunities` — scope `export:opportunities`
+### GET /opportunities — `export:opportunities`
 
-Approved opportunities the university dashboard lists: owned by the university, published by
-its authorised faculty, or joined by its students.
+Approved, visible opportunities on the university dashboard (owned, via authorised faculty, or joined by its students).
 
-Fields: `id`, `title`, `types`, `mode`, `city`, `venue`, `start_date`, `end_date`,
-`expected_hours`, `volunteers_required`, `primary_sdg`, `secondary_sdgs`, `status`,
-`workflow_stage`, `is_student_created`, `owned_by_university`, `host_organization {id, name,
-type}`, `faculty_supervisor {name, email?}`, `created_at`, `updated_at`.
-
-### `GET /community-service` — scope `export:community-service`
-
-Verified community-service credit, one row per student per project. `source=structured`
-(default) is CIEL PK-verified project reports; `source=quick` is approved Quick Community Impact.
-
-| Field | Notes |
+| Field | Type |
 | --- | --- |
-| `record_id` | report id, or `logId:participantId` for quick impact |
-| `source` | `structured` or `quick` |
-| `student_id`, `registration_number`, `student_name`, `department`, `programme`, `enrollment_year` | |
-| `opportunity_id`, `title`, `host_organization` | `opportunity_id` is null for quick impact |
-| `hours` | credited hours (attendance logs when present, else the verified report) |
-| `hours_source` | `attendance`, `report` or `quick` |
-| `sdgs` | SDG numbers |
-| `faculty_name` | supervising faculty |
-| `verified_at` | when CIEL PK verified it |
-| `certificate_id`, `verify_url` | public verification of the credit |
-| `activity_date` | quick impact only |
-| `email`, `phone` | only with personal fields |
-| `updated_at` | |
+| `id` `title` | |
+| `types` | string[] |
+| `mode` `city` `venue` | string \| null |
+| `start_date` `end_date` | string \| null |
+| `expected_hours` `volunteers_required` | number \| null |
+| `primary_sdg` | number \| null |
+| `secondary_sdgs` | number[] |
+| `status` `workflow_stage` | string \| null |
+| `is_student_created` `owned_by_university` | boolean |
+| `host_organization` | `{ id, name, type }` \| null |
+| `faculty_supervisor` | `{ name, email? }` |
+| `created_at` `updated_at` | ISO |
 
-### `GET /fyp` — scope `export:fyp`
+### GET /community-service — `export:community-service`
 
-Submitted FYP / thesis entries approved by the supervisor, for the university's students.
+Verified credit, one row per student per activity. Extra param `source`: `structured` (default, CIEL PK-verified project reports) or `quick` (approved Quick Community Impact).
 
-Fields: `id`, student block, `title`, `school`, `degree`, `graduation_year`, `project_types`,
-`supervisor {name, email?}`, `sdgs`, `approval {status, approved_at}`, `merit_rank {rank, of,
-scope}` (null until a ranking was published), `created_at`, `updated_at`.
+| Field | Type |
+| --- | --- |
+| `record_id` | report id, or `logId:participantId` for quick |
+| `source` | `structured` \| `quick` |
+| `student_id` `registration_number` `student_name` `department` `programme` `enrollment_year` | |
+| `opportunity_id` | uuid \| null (null for quick) |
+| `title` `host_organization` | string \| null |
+| `hours` | number |
+| `hours_source` | `attendance` \| `report` \| `quick` |
+| `sdgs` | number[] |
+| `faculty_name` | string \| null |
+| `verified_at` | ISO |
+| `certificate_id` `verify_url` | string \| null |
+| `activity_date` | string \| null (quick only) |
+| `email` `phone` | personal |
+| `updated_at` | ISO |
 
-### `GET /ventures` — scope `export:ventures`
+### GET /fyp — `export:fyp`
 
-Submitted startup / venture entries approved by the supervisor, for the university's students.
+Submitted FYP / thesis entries approved by the supervisor.
 
-Fields: `id`, student block, `venture_name`, `stage`, `faculty`, `venture_department`,
-`program`, `academic_year`, `supervisor {name, email?}`, `sdgs`, `visible_on_showcase`,
-`approval {supervisor_status, university_status}`, `merit_rank`, `created_at`, `updated_at`.
+| Field | Type |
+| --- | --- |
+| `id` | uuid |
+| student block | as above |
+| `title` `school` `degree` `graduation_year` | string \| null |
+| `project_types` | string[] |
+| `supervisor` | `{ name, email? }` |
+| `sdgs` | number[] |
+| `approval` | `{ status, approved_at }` |
+| `merit_rank` | `{ rank, of, scope }` \| null |
+| `created_at` `updated_at` | ISO |
 
-Founder email and WhatsApp are never exported.
+### GET /ventures — `export:ventures`
 
-### `GET /summary` — scope `export:summary`
+Submitted venture entries approved by the supervisor. Founder contact is never exported.
 
-Totals for a period, computed from the same rows the list endpoints return.
+| Field | Type |
+| --- | --- |
+| `id` | uuid |
+| student block | as above |
+| `venture_name` `stage` `faculty` `venture_department` `program` `academic_year` | string \| null |
+| `supervisor` | `{ name, email? }` |
+| `sdgs` | number[] |
+| `visible_on_showcase` | boolean |
+| `approval` | `{ supervisor_status, university_status }` |
+| `merit_rank` | `{ rank, of, scope }` \| null |
+| `created_at` `updated_at` | ISO |
 
-Query: `connection_id`, optional `from` and `to` (`YYYY-MM-DD` or ISO). Verified-at is the
-period test for community service, approval date for FYPs, last update for ventures.
+### GET /summary — `export:summary`
+
+Period totals from the same rows as the list endpoints. Params: `connection_id`, optional `from`, `to` (`YYYY-MM-DD` or ISO). Period test: `verified_at` for community service, `approved_at` for FYP, `updated_at` for ventures.
 
 ```json
 {
+  "success": true,
+  "schema_version": "1.0",
+  "scope": "export:summary",
+  "connection_id": "…",
+  "organization": { "id": "…", "name": "…" },
   "summary": {
     "period": { "from": "2026-09-01T00:00:00.000Z", "to": "2027-01-31T00:00:00.000Z" },
     "students": { "total": 1240, "with_verified_community_service": 310 },
@@ -253,42 +302,28 @@ period test for community service, approval date for FYPs, last update for ventu
 }
 ```
 
----
+## Errors
 
-## 4. Error codes
+Body: `{ "success": false, "code": "…", "message": "…" }`
 
-| HTTP | `code` | Meaning |
-| --- | --- | --- |
-| 401 | `HUB_AUTH_HEADERS_MISSING`, `HUB_SIGNATURE_INVALID`, `HUB_TIMESTAMP_STALE`, `HUB_NONCE_REPLAYED`, `HUB_CREDENTIAL_INVALID` | signing problems (see vendor guide) |
-| 400 | `CONNECTION_ID_REQUIRED` | `connection_id` missing or not a UUID |
-| 400 | `CURSOR_INVALID`, `LIMIT_INVALID`, `DATE_INVALID`, `SOURCE_INVALID`, `PERIOD_INVALID` | bad query values |
-| 403 | `CONNECTION_NOT_FOUND`, `CONNECTION_NOT_ACTIVE`, `CONNECTION_NOT_YET_VALID`, `CONNECTION_EXPIRED` | the connection is not usable |
-| 403 | `SCOPE_NOT_GRANTED` | the platform or the connection lacks the scope |
-| 403 | `ORGANIZATION_NOT_UNIVERSITY` | export is only for university connections |
-| 403 | `PLATFORM_SUSPENDED` | the platform was suspended by CIEL PK |
-| 429 | `RATE_LIMITED` | per-platform limit; honour `Retry-After` |
+| HTTP | Code |
+| --- | --- |
+| 401 | `HUB_AUTH_HEADERS_MISSING` `HUB_TIMESTAMP_STALE` `HUB_NONCE_INVALID` `HUB_NONCE_REPLAYED` `HUB_CREDENTIAL_INVALID` `HUB_SIGNATURE_INVALID` |
+| 400 | `CONNECTION_ID_REQUIRED` `CURSOR_INVALID` `LIMIT_INVALID` `DATE_INVALID` `SOURCE_INVALID` `PERIOD_INVALID` |
+| 403 | `CONNECTION_NOT_FOUND` `CONNECTION_NOT_ACTIVE` `CONNECTION_NOT_YET_VALID` `CONNECTION_EXPIRED` `SCOPE_NOT_GRANTED` `ORGANIZATION_NOT_UNIVERSITY` `PLATFORM_SUSPENDED` |
+| 429 | `RATE_LIMITED` — honour `Retry-After` |
+| 500 | audit write failed; retry later |
 
----
+## Operational notes
 
-## 5. Limits, caching and audit
+- Responses are `Cache-Control: no-store`. Do not cache or log bodies.
+- Every call is audited (connection, scope, row count, IP) before the response is sent.
+- Query string is not signed; TLS plus timestamp and single-use nonce cover it. HTTPS only.
 
-- Rate limit per platform as configured by CIEL PK (default 120 requests / minute).
-- `summary` has its own budget of 6 calls per minute per platform (it walks every record); honour
-  `Retry-After` on 429.
-- Max 500 rows per page.
-- Responses are sent with `Cache-Control: no-store`. Do not put a caching proxy between your job
-  and CIEL PK, and do not log response bodies.
-- Every call is written to the hub audit trail (connection, scope, row count, source IP; never row
-  content) **before** the response is sent. If the audit row cannot be written the call fails with
-  500 and no data is returned; retry later. CIEL PK admin sees the trail under Integrations → Audit.
+## Go-live
 
-## 6. Go-live checklist
-
-1. Sandbox credential issued; connection proposed with the export scopes.
-2. University approves the connection; CIEL PK authorizes it.
-3. University runs a full pull of `students` and `community-service` against the sandbox and
-   confirms registration numbers match its records (no email / phone yet: sandbox).
-4. Personal-fields decision recorded on the connection (and in the data agreement). It takes
-   effect only once the platform is live.
-5. Nightly job scheduled with cursor storage and retry.
-6. Platform switched to live; live credential issued; sandbox credential revoked.
+1. Sandbox credential + connection with export scopes; university approves, CIEL PK authorizes.
+2. Full pull of `students` and `community-service` against sandbox; match registration numbers.
+3. Personal-fields decision recorded on the connection and in the data agreement.
+4. Nightly job with cursor storage and retry.
+5. Platform set to live; live credential issued; sandbox credential revoked.

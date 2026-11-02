@@ -4254,7 +4254,9 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       viewer('reg@uni.edu', 'university', 'uni-org'),
     );
     expect(data?.id).toBe('opp-acc-1');
-    expect(data?.creator?.email).toBeUndefined(); // contact keys stripped for non-reviewers
+    // Signed-in viewers get the creator's own contact; reviewer contacts stay stripped.
+    expect(data?.creator?.email).toBe('creator@x.org');
+    expect(data?.creator?.phone).toBe('123');
     expect(data?.viewer_access.can_edit).toBe(false);
   });
 
@@ -4284,7 +4286,72 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       viewer('stu@uni.edu', 'student'),
     );
     expect(data?.id).toBe('opp-acc-1');
-    expect(data?.creator?.email).toBeUndefined();
+    expect(data?.creator?.email).toBe('creator@x.org');
+  });
+
+  it('detail: a plain student viewer gets the creator email + WhatsApp but no supervisor contact', async () => {
+    const { service } = makeAccessService(
+      {
+        supervision: {
+          contact: 'creator@x.org',
+          whatsapp_e164: '+923001234567',
+        },
+      },
+      { hasApplication: true },
+    );
+    // Account without a phone: the WhatsApp typed on the listing is used when the creator is
+    // the listing's supervisor contact.
+    privates(service).usersRepository.findOne = jest.fn().mockResolvedValue({
+      id: 'creator-1',
+      name: 'C',
+      email: 'creator@x.org',
+      phone: '',
+    });
+    const data = await service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('stu@uni.edu', 'student'),
+    );
+    expect(data?.creator?.email).toBe('creator@x.org');
+    expect(data?.creator?.phone).toBe('+923001234567');
+    expect(
+      (data?.supervision as Record<string, unknown> | undefined)?.contact,
+    ).toBeUndefined();
+    expect(
+      (data?.supervision as Record<string, unknown> | undefined)?.whatsapp_e164,
+    ).toBeUndefined();
+
+    // A different supervisor: the listing WhatsApp belongs to someone else, so nothing.
+    const other = makeAccessService(
+      {
+        supervision: {
+          contact: 'prof@uni.edu',
+          whatsapp_e164: '+923001234567',
+        },
+      },
+      { hasApplication: true },
+    );
+    privates(other.service).usersRepository.findOne = jest
+      .fn()
+      .mockResolvedValue({
+        id: 'creator-1',
+        name: 'C',
+        email: 'creator@x.org',
+        phone: '',
+      });
+    const otherData = await other.service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('stu@uni.edu', 'student'),
+    );
+    expect(otherData?.creator?.phone).toBeNull();
+
+    // Anonymous directory visitors never get the creator's contact.
+    const anon = makeAccessService(
+      { admin_approved: true, status: 'active', workflowStage: 'live' },
+      {},
+    );
+    const anonData = await anon.service.findOneWithCreator('opp-acc-1', {});
+    expect(anonData?.creator?.email).toBeNull();
+    expect(anonData?.creator?.phone).toBeNull();
   });
 
   it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', () => {

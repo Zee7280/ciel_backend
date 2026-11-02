@@ -5347,26 +5347,62 @@ export class OpportunitiesService {
         })
       : null;
 
+    // The creator's own email / WhatsApp are shown to every signed-in viewer who may open the
+    // record (the card's "Created by" box and its "WhatsApp creator" button), so a student can
+    // reach the person running the project. Anonymous directory visitors never get them.
+    const creatorContactVisible = privileged || Boolean(viewer?.id);
+    const creatorBlock = creator
+      ? {
+          id: creator.id,
+          name: creator.name,
+          email: creatorContactVisible ? creator.email : null,
+          phone: creatorContactVisible
+            ? this.creatorWhatsappForListing(opportunity, creator)
+            : null,
+        }
+      : null;
+
     const result = {
       ...opportunity,
-      creator: creator
-        ? {
-            id: creator.id,
-            name: creator.name,
-            // Creator PII is owner/reviewer/admin only.
-            email: privileged ? creator.email : null,
-            phone: privileged ? (creator.phone ?? null) : null,
-          }
-        : null,
+      creator: creatorBlock,
       // What THIS viewer may actually do with the record, so the UI never offers a button the
       // API would refuse (e.g. "Edit" to an executing-org contact or a university observer).
       viewer_access: {
         can_edit: this.viewerMayEditOpportunity(opportunity, viewer),
       },
     };
+    if (privileged) return result;
     // Supervisor / partner / executing-org contact details are for the owner, designated
-    // reviewers and admin only — a plain viewer of a live opportunity does not get them.
-    return privileged ? result : redactOpportunityContactDetails(result);
+    // reviewers and admin only — a plain viewer of a live opportunity does not get them. The
+    // creator block is re-attached after redaction because its `email` / `phone` keys would
+    // otherwise be stripped with the third-party contacts.
+    return {
+      ...redactOpportunityContactDetails(result),
+      creator: creatorBlock,
+    };
+  }
+
+  /**
+   * The creator's WhatsApp number for the detail card: the account phone, else the WhatsApp the
+   * creator typed on the listing when they are its supervisor contact (faculty-created rows).
+   */
+  private creatorWhatsappForListing(
+    opportunity: Opportunity,
+    creator: { email?: string | null; phone?: string | null },
+  ): string | null {
+    const accountPhone = (creator.phone || '').trim();
+    if (accountPhone) return accountPhone;
+    const sup = (opportunity.supervision || {}) as Record<string, unknown>;
+    const listingWhatsapp =
+      typeof sup.whatsapp_e164 === 'string' ? sup.whatsapp_e164.trim() : '';
+    if (!listingWhatsapp) return null;
+    const supervisorEmail = this.normalizeEmail(
+      typeof sup.contact === 'string' ? sup.contact : '',
+    );
+    const creatorEmail = this.normalizeEmail(creator.email || '');
+    return supervisorEmail && supervisorEmail === creatorEmail
+      ? listingWhatsapp
+      : null;
   }
 
   // Admin methods

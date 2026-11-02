@@ -343,11 +343,12 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       expect(
         idsOf(await h.as(stranger).get('/opportunities/faculty/mine')),
       ).not.toContain(opp.id);
-      // an unrelated faculty sees the live record but never the creator's contact details
+      // an unrelated faculty sees the live record with the creator's own contact (every
+      // signed-in viewer may reach the creator); reviewer contacts stay redacted
       const strangerView = await detail(h, stranger, opp.id);
       expect(
         (strangerView.body as DataBody<DetailData>).data.creator?.email ?? null,
-      ).toBeNull();
+      ).toBeTruthy();
       // join-applications queue: primary lists + approves; the row's action rule is the list rule
       const list = await h
         .as(primary)
@@ -952,7 +953,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       }
       const d = await detail(h, uniUser, opp.id);
       const detailData = (d.body as DataBody<DetailData>).data;
-      expect(detailData.creator?.email ?? null).toBeNull(); // no student contact leak
+      expect(detailData.creator?.email ?? null).toBeTruthy(); // creator contact for signed-in viewers
       expect(JSON.stringify(detailData.supervision ?? {})).not.toContain(
         fac.email,
       );

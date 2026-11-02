@@ -19,6 +19,12 @@ export class HubExportError extends HttpException {
  */
 export type ExportCursor = { u: string; i: string };
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Every exported row id is a uuid; a cursor outside that shape never reaches the database. */
+const CURSOR_MIN_MS = Date.UTC(2000, 0, 1);
+const CURSOR_MAX_AHEAD_MS = 366 * 24 * 60 * 60 * 1000;
+
 export function encodeCursor(cursor: ExportCursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 }
@@ -40,12 +46,19 @@ export function decodeCursor(raw: unknown): ExportCursor | null {
       !parsed ||
       typeof parsed.u !== 'string' ||
       typeof parsed.i !== 'string' ||
-      Number.isNaN(new Date(parsed.u).getTime()) ||
-      !parsed.i
+      !UUID_RE.test(parsed.i)
     ) {
       throw new Error('shape');
     }
-    return { u: parsed.u, i: parsed.i };
+    const at = new Date(parsed.u).getTime();
+    if (
+      Number.isNaN(at) ||
+      at < CURSOR_MIN_MS ||
+      at > Date.now() + CURSOR_MAX_AHEAD_MS
+    ) {
+      throw new Error('range');
+    }
+    return { u: new Date(at).toISOString(), i: parsed.i.toLowerCase() };
   } catch {
     throw new HubExportError(
       HttpStatus.BAD_REQUEST,

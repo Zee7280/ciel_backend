@@ -43,8 +43,15 @@ function queryBuilder(rows: unknown[]): QueryBuilderMock {
 const platform = {
   id: 'plat-1',
   slug: 'bnu-erp',
+  status: 'live',
   approvedEventTypes: ['export:students', 'export:fyp'],
 } as unknown as ExternalPlatform;
+const sandboxPlatform = {
+  ...platform,
+  status: 'sandbox',
+} as unknown as ExternalPlatform;
+
+const sid = (n: number) => `${String(n).repeat(8)}-0000-4000-8000-000000000000`;
 
 const connection = {
   id: 'conn-1',
@@ -82,7 +89,7 @@ function makeService(opts: {
         .includes('university'),
     resolveUniversityScope: jest.fn().mockResolvedValue({
       org: { id: 'uni-1', name: 'BNU' },
-      studentIds: new Set(opts.studentIds ?? ['s-1', 's-2']),
+      studentIds: new Set(opts.studentIds ?? [sid(1), sid(2)]),
       opportunityIds: new Set<string>(),
       institutionalOpportunityIds: new Set<string>(),
       affiliatedTeamKeys: new Set<string>(),
@@ -181,11 +188,21 @@ describe('HubExportService.resolveAccess', () => {
     });
     expect(access.personalFields).toBe(true);
   });
+
+  it('never grants personal fields to a sandbox platform, whatever the connection says', async () => {
+    const { service } = makeService({ personal: true });
+    const access = await service.resolveAccess(
+      sandboxPlatform,
+      '11111111-1111-4111-8111-111111111111',
+      'export:students',
+    );
+    expect(access.personalFields).toBe(false);
+  });
 });
 
 describe('HubExportService.students', () => {
   const user = (n: number) => ({
-    id: `s-${n}`,
+    id: sid(n),
     name: `Student ${n}`,
     email: `s${n}@bnu.edu.pk`,
     phone: '0300123456' + n,
@@ -219,7 +236,7 @@ describe('HubExportService.students', () => {
       parseExportQuery({}),
     );
     expect(pageA.rows[0]).toMatchObject({
-      id: 's-1',
+      id: sid(1),
       registration_number: 'BNU-1',
       department: 'Computer Science',
       programme: 'BSCS',
@@ -237,6 +254,18 @@ describe('HubExportService.students', () => {
       email: 's1@bnu.edu.pk',
       phone: '03001234561',
     });
+
+    const c = makeService({ users: [user(1)], personal: true });
+    const pageC = await c.service.students(
+      await c.service.resolveAccess(
+        sandboxPlatform,
+        '11111111-1111-4111-8111-111111111111',
+        'export:students',
+      ),
+      parseExportQuery({}),
+    );
+    expect(pageC.rows[0]).not.toHaveProperty('email');
+    expect(pageC.rows[0]).not.toHaveProperty('phone');
   });
 
   it('pages by (updated_at, id) and scopes to the university students', async () => {
@@ -249,7 +278,7 @@ describe('HubExportService.students', () => {
     expect(page.has_more).toBe(true);
     expect(page.next_cursor).toBeTruthy();
     expect(s.usersQb.calls.take).toEqual([3]);
-    expect(s.usersQb.calls.where[0][1]).toEqual({ ids: ['s-1', 's-2'] });
+    expect(s.usersQb.calls.where[0][1]).toEqual({ ids: [sid(1), sid(2)] });
 
     const next = await s.service.students(
       await access(s.service),

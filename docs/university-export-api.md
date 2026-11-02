@@ -24,9 +24,11 @@ Approval flow, in order:
 3. The university approves the connection from its dashboard (**Integrations**).
 4. CIEL PK admin authorizes it. From then on the endpoints below answer.
 
-Personal fields (student email and phone) are included only when the connection's **personal
-fields** switch is on; otherwise the keys are absent (not blank). The registration number is
-always included because it is the matching key on the university side.
+Personal fields (student email and phone, supervisor email) are included only when the
+connection's **personal fields** switch is on **and the platform is live**. A sandbox platform
+never receives personal fields, whatever the connection says, so wiring can be tested against real
+rows without personal data leaving. Otherwise the keys are absent (not blank). The registration
+number is always included because it is the matching key on the university side.
 
 ---
 
@@ -53,7 +55,8 @@ GET\n
 ```
 
 All export calls are `GET` with no body, so the body hash is always the hash of the empty string.
-The query string is **not** part of the signature.
+The query string is **not** part of the signature; it is protected by TLS, and the timestamp plus
+single-use nonce stop a captured request from being replayed. Always call over `https://`.
 
 ### Python
 
@@ -267,19 +270,25 @@ period test for community service, approval date for FYPs, last update for ventu
 
 ---
 
-## 5. Limits and audit
+## 5. Limits, caching and audit
 
 - Rate limit per platform as configured by CIEL PK (default 120 requests / minute).
+- `summary` has its own budget of 6 calls per minute per platform (it walks every record); honour
+  `Retry-After` on 429.
 - Max 500 rows per page.
-- Every call is written to the hub audit trail with the connection, scope, row count and source IP;
-  CIEL PK admin sees it under Integrations → Audit.
+- Responses are sent with `Cache-Control: no-store`. Do not put a caching proxy between your job
+  and CIEL PK, and do not log response bodies.
+- Every call is written to the hub audit trail (connection, scope, row count, source IP; never row
+  content) **before** the response is sent. If the audit row cannot be written the call fails with
+  500 and no data is returned; retry later. CIEL PK admin sees the trail under Integrations → Audit.
 
 ## 6. Go-live checklist
 
 1. Sandbox credential issued; connection proposed with the export scopes.
 2. University approves the connection; CIEL PK authorizes it.
 3. University runs a full pull of `students` and `community-service` against the sandbox and
-   confirms registration numbers match its records.
-4. Personal-fields decision recorded on the connection (and in the data agreement).
+   confirms registration numbers match its records (no email / phone yet: sandbox).
+4. Personal-fields decision recorded on the connection (and in the data agreement). It takes
+   effect only once the platform is live.
 5. Nightly job scheduled with cursor storage and retry.
 6. Platform switched to live; live credential issued; sandbox credential revoked.

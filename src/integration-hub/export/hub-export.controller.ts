@@ -1,13 +1,17 @@
 import {
   Controller,
   Get,
+  Header,
   HttpException,
   HttpStatus,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { HubAuditService } from '../audit/hub-audit.service';
+import { HubRateLimiter } from '../security/hub-rate-limiter';
 import { PlatformAuthGuard } from '../security/platform-auth.guard';
 import type { HubRequest } from '../security/platform-auth.guard';
 import {
@@ -28,13 +32,23 @@ type ExportRows = {
   has_more: boolean;
 };
 
+/** Personal data in the body: never cache it anywhere between us and the university's server. */
+const NO_STORE = 'no-store, no-cache, must-revalidate, private';
+
+/** `summary` walks every record of the university; a handful per minute is all a report needs. */
+export const HUB_EXPORT_SUMMARY_PER_MINUTE = 6;
+
 /**
  * University Export API — `/api/integrations/v1/export/*`. Machine auth (same HMAC headers as the
- * vendor API), read-only, scoped to the organization on `connection_id`. Every call is audited.
+ * vendor API), read-only, scoped to the organization on `connection_id`. Every call is audited
+ * before the data leaves: when the audit row cannot be written the request fails.
  */
 @Controller('api/integrations/v1/export')
 @UseGuards(PlatformAuthGuard)
 export class HubExportController {
+  /** Separate budget for the summary endpoint, on top of the platform-wide guard limit. */
+  readonly summaryLimiter = new HubRateLimiter();
+
   constructor(
     private readonly exporter: HubExportService,
     private readonly audit: HubAuditService,
@@ -79,7 +93,7 @@ export class HubExportController {
     const access = await this.access(req, query, scope);
     const q = parseExportQuery(query);
     const page = await run(access, q);
-    void this.audit.log({
+    await this.audit.logOrThrow({
       actor: {
         type: 'platform',
         id: access.platform.id,
@@ -119,6 +133,7 @@ export class HubExportController {
 
   /** Students affiliated with the university (profile, roster link, registration number). */
   @Get('students')
+  @Header('Cache-Control', NO_STORE)
   students(@Req() req: HubRequest, @Query() query: Record<string, unknown>) {
     return this.list(req, query, 'export:students', (a, q) =>
       this.exporter.students(a, q),
@@ -127,6 +142,7 @@ export class HubExportController {
 
   /** Approved opportunities the university dashboard lists (owned or via authorised faculty / students). */
   @Get('opportunities')
+  @Header('Cache-Control', NO_STORE)
   opportunities(
     @Req() req: HubRequest,
     @Query() query: Record<string, unknown>,
@@ -138,6 +154,7 @@ export class HubExportController {
 
   /** Verified community-service credit: `source=structured` (default) or `source=quick`. */
   @Get('community-service')
+  @Header('Cache-Control', NO_STORE)
   communityService(
     @Req() req: HubRequest,
     @Query() query: Record<string, unknown>,
@@ -167,6 +184,7 @@ export class HubExportController {
 
   /** Supervisor-approved FYP / thesis entries. */
   @Get('fyp')
+  @Header('Cache-Control', NO_STORE)
   fyp(@Req() req: HubRequest, @Query() query: Record<string, unknown>) {
     return this.list(req, query, 'export:fyp', (a, q) =>
       this.exporter.fyp(a, q),
@@ -175,6 +193,7 @@ export class HubExportController {
 
   /** Supervisor-approved startup / venture entries. */
   @Get('ventures')
+  @Header('Cache-Control', NO_STORE)
   ventures(@Req() req: HubRequest, @Query() query: Record<string, unknown>) {
     return this.list(req, query, 'export:ventures', (a, q) =>
       this.exporter.ventures(a, q),
@@ -183,10 +202,29 @@ export class HubExportController {
 
   /** Period totals (semester report): `from` / `to` as YYYY-MM-DD or ISO date-time. */
   @Get('summary')
+  @Header('Cache-Control', NO_STORE)
   async summary(
     @Req() req: HubRequest,
     @Query() query: Record<string, unknown>,
+    @Res({ passthrough: true }) res: Response,
   ) {
+    const platform = this.platformOf(req);
+    const budget = this.summaryLimiter.check(
+      `summary:${platform.id}`,
+      HUB_EXPORT_SUMMARY_PER_MINUTE,
+    );
+    if (!budget.allowed) {
+      res.setHeader('Retry-After', String(budget.retryAfterSeconds));
+      throw new HttpException(
+        {
+          success: false,
+          code: 'RATE_LIMITED',
+          message: `summary is limited to ${HUB_EXPORT_SUMMARY_PER_MINUTE} calls per minute per platform`,
+          retry_after_seconds: budget.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const access = await this.access(req, query, 'export:summary');
     const period = {
       from: parseDateParam(query.from, 'from'),
@@ -200,7 +238,7 @@ export class HubExportController {
       );
     }
     const summary = await this.exporter.summary(access, period);
-    void this.audit.log({
+    await this.audit.logOrThrow({
       actor: {
         type: 'platform',
         id: access.platform.id,

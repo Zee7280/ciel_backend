@@ -33,23 +33,31 @@ export class HubAuditService {
 
   async log(input: HubAuditInput): Promise<void> {
     try {
-      const row = this.repo.create({
-        actorType: input.actor.type,
-        actorId: input.actor.id ?? null,
-        actorLabel: input.actor.label ?? null,
-        ip: input.actor.ip ?? null,
-        action: input.action.slice(0, 64),
-        targetType: input.targetType.slice(0, 32),
-        targetId: input.targetId ?? null,
-        connectionId: input.connectionId ?? null,
-        details: input.details ?? null,
-      });
-      await this.repo.save(row);
+      await this.logOrThrow(input);
     } catch (err) {
       this.logger.warn(
         `hub audit write failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Same write, but a failure propagates. For reads that hand out personal data (University
+   * Export API) the trail must exist before the response leaves: no audit row, no data.
+   */
+  async logOrThrow(input: HubAuditInput): Promise<void> {
+    const row = this.repo.create({
+      actorType: input.actor.type,
+      actorId: input.actor.id ?? null,
+      actorLabel: input.actor.label ?? null,
+      ip: input.actor.ip ?? null,
+      action: input.action.slice(0, 64),
+      targetType: input.targetType.slice(0, 32),
+      targetId: input.targetId ?? null,
+      connectionId: input.connectionId ?? null,
+      details: input.details ?? null,
+    });
+    await this.repo.save(row);
   }
 
   async list(filters: {

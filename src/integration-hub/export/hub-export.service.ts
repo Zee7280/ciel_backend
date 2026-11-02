@@ -43,7 +43,10 @@ export type ExportAccess = {
   platform: ExternalPlatform;
   connection: ExternalConnection;
   organization: { id: string; name: string };
-  /** Email / phone are included only when the connection allows personal fields. */
+  /**
+   * Email / phone are included only when the connection allows personal fields AND the platform
+   * is live: a sandbox credential exists for wiring tests and never carries personal data.
+   */
   personalFields: boolean;
 };
 
@@ -164,7 +167,8 @@ export class HubExportService {
       platform,
       connection,
       organization: { id: org.id, name: org.name },
-      personalFields: connection.personalFieldsAllowed === true,
+      personalFields:
+        connection.personalFieldsAllowed === true && platform.status === 'live',
     };
   }
 

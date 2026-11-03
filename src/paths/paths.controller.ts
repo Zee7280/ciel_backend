@@ -823,6 +823,33 @@ export class PathsController {
     return { success: true, data };
   }
 
+  /** Delete a draft venture (never submitted, or withdrawn). Submitted ventures cannot be deleted. */
+  @Delete('startup-ventures/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async deleteVentureById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.pathsService.deleteVentureByIdForUser(req.user.id, id);
+    return { success: true };
+  }
+
+  /** Pull a submitted venture back to draft while faculty has not decided yet. */
+  @Post('startup-ventures/:id/withdraw')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async withdrawVenture(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.pathsService.withdrawVentureForUser(
+      req.user.id,
+      id,
+    );
+    return { success: true, data };
+  }
+
   @Post('startup-ventures/:id/documents')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)

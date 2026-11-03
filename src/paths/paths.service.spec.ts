@@ -3877,3 +3877,131 @@ describe('PathsService — venture multi-record (list / create / id-scoped)', ()
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('PathsService — venture delete draft / withdraw submission', () => {
+  const makeService = (row: Record<string, unknown>) => {
+    const rows = [row];
+    const match = (where: Record<string, unknown>) =>
+      rows.find((r) => Object.entries(where).every(([k, v]) => r[k] === v)) ??
+      null;
+    const repo = {
+      findOne: jest.fn(({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(match(where)),
+      ),
+      save: jest.fn((r: Record<string, unknown>) => Promise.resolve(r)),
+    };
+    const deleteQb = {
+      delete: jest.fn().mockReturnThis(),
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn(() =>
+        Promise.resolve({ affected: row.status === 'submitted' ? 0 : 1 }),
+      ),
+    };
+    const ventureRepo = {
+      ...repo,
+      createQueryBuilder: jest.fn(() => deleteQb),
+      manager: {
+        transaction: jest.fn(
+          (cb: (m: { getRepository: () => typeof repo }) => unknown) =>
+            cb({ getRepository: () => repo }),
+        ),
+      },
+    };
+    const inviteRepo = { ...makeInviteRepo(), delete: jest.fn() };
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      inviteRepo,
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    jest
+      .spyOn(service as any, 'ventureAnnotate')
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    jest
+      .spyOn(service as any, 'withCompleteness')
+      .mockImplementation((entry: unknown) => entry);
+    return { service, deleteQb, inviteRepo };
+  };
+
+  it('deletes a draft and its team invites', async () => {
+    const { service, deleteQb, inviteRepo } = makeService({
+      id: 'v1',
+      userId: 's1',
+      status: 'draft',
+    });
+    await service.deleteVentureByIdForUser('s1', 'v1');
+    expect(deleteQb.execute).toHaveBeenCalled();
+    expect(deleteQb.andWhere).toHaveBeenCalledWith(
+      `status IS DISTINCT FROM 'submitted'`,
+    );
+    expect(inviteRepo.delete).toHaveBeenCalledWith({
+      kind: 'venture',
+      entryId: 'v1',
+    });
+  });
+
+  it('never deletes a submitted venture', async () => {
+    const { service, deleteQb } = makeService({
+      id: 'v1',
+      userId: 's1',
+      status: 'submitted',
+      reviewPipeline: { supervisorStatus: 'approved' },
+    });
+    await expect(
+      service.deleteVentureByIdForUser('s1', 'v1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(deleteQb.execute).not.toHaveBeenCalled();
+  });
+
+  it("refuses to delete another student's venture", async () => {
+    const { service } = makeService({
+      id: 'v1',
+      userId: 's1',
+      status: 'draft',
+    });
+    await expect(
+      service.deleteVentureByIdForUser('s2', 'v1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('withdraws a pending submission back to draft', async () => {
+    const row: Record<string, unknown> = {
+      id: 'v1',
+      userId: 's1',
+      status: 'submitted',
+      reviewPipeline: { supervisorStatus: 'pending', declarationWork: true },
+    };
+    const { service } = makeService(row);
+    const out = await service.withdrawVentureForUser('s1', 'v1');
+    expect(out.status).toBe('draft');
+    expect(out.reviewPipeline).toEqual(
+      expect.objectContaining({
+        supervisorStatus: 'not_started',
+        declarationWork: true,
+      }),
+    );
+  });
+
+  it.each(['approved', 'rejected', 'revisions_requested'])(
+    'cannot withdraw once faculty decided (%s)',
+    async (decision) => {
+      const { service } = makeService({
+        id: 'v1',
+        userId: 's1',
+        status: 'submitted',
+        reviewPipeline: { supervisorStatus: decision },
+      });
+      await expect(
+        service.withdrawVentureForUser('s1', 'v1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    },
+  );
+});

@@ -3728,6 +3728,66 @@ export class PathsService implements OnModuleInit {
     return this.afterVentureSave(saved, userId);
   }
 
+  /** Owner deletes a venture that is a draft (never submitted, or withdrawn back to draft).
+   * Submitted, approved and rejected ventures stay — they are part of the university record.
+   * Team invites that pointed at the draft go with it. */
+  async deleteVentureByIdForUser(userId: string, id: string) {
+    const entry = await this.ventureRepo.findOne({ where: { id, userId } });
+    if (!entry) throw new NotFoundException('Venture not found');
+    if (entry.status === 'submitted') {
+      throw new BadRequestException(
+        'Only drafts can be deleted. A submitted venture stays on your university record.',
+      );
+    }
+    // Re-checked in the delete itself, so a submit landing in between can never be deleted.
+    const result = await this.ventureRepo
+      .createQueryBuilder()
+      .delete()
+      .from(VentureEntry)
+      .where('id = :id AND "userId" = :userId', { id, userId })
+      .andWhere(`status IS DISTINCT FROM 'submitted'`)
+      .execute();
+    if (!result.affected) {
+      throw new BadRequestException(
+        'Only drafts can be deleted. A submitted venture stays on your university record.',
+      );
+    }
+    await this.teamMemberInviteRepo.delete({ kind: 'venture', entryId: id });
+  }
+
+  /** Owner pulls a submitted venture back to draft to edit it — only while faculty has not decided
+   * yet. A venture returned for revision is edited in place; approved / rejected stay locked. */
+  async withdrawVentureForUser(userId: string, id: string) {
+    const saved = await this.ventureRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(VentureEntry);
+        const entry = await repo.findOne({
+          where: { id, userId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!entry) throw new NotFoundException('Venture not found');
+        if (entry.status !== 'submitted') {
+          throw new BadRequestException('This venture is not submitted.');
+        }
+        const line = entry.reviewPipeline?.supervisorStatus;
+        if (line && line !== 'pending' && line !== 'not_started') {
+          throw new BadRequestException(
+            'Your faculty has already decided on this venture, so it can no longer be withdrawn.',
+          );
+        }
+        entry.status = 'draft';
+        entry.reviewPipeline = {
+          ...(entry.reviewPipeline || {}),
+          supervisorStatus: 'not_started',
+        };
+        entry.isVisible = deriveVentureIsVisible(entry);
+        return repo.save(entry);
+      },
+    );
+    const [annotated] = await this.ventureAnnotate([saved]);
+    return { ...this.withCompleteness(annotated)!, isOwner: true };
+  }
+
   private async afterVentureSave(saved: VentureEntry, userId: string) {
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncVentureInvites(saved, userId).catch((err) =>

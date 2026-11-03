@@ -2106,4 +2106,152 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       ).status,
     ).toBe(400);
   });
+
+  it('admin delete: any status can be removed; an approved log needs confirmation and takes its hours and certificate with it', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const bystander = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const adminList = async (status: string) =>
+      (
+        (await h.as(admin).get(`/admin/quick-work?status=${status}`))
+          .body as Body<{
+          rows: { id: string }[];
+          counts: Record<string, number>;
+        }>
+      ).data;
+    const exists = async (id: string) =>
+      (await h.as(admin).get(`/admin/quick-work/${id}`)).status === 200;
+
+    // A draft: deleted straight away, and an unrelated log is untouched.
+    const keep = await draft(
+      bystander,
+      completeLog(bystander, faculty, { title: 'Bystander log' }),
+    );
+    const scratch = await draft(
+      lead,
+      completeLog(lead, faculty, { title: 'Scratch draft' }),
+    );
+    expect(
+      (await adminList('draft')).rows.some((r) => r.id === scratch.id),
+    ).toBe(true);
+    const gone = await h.as(admin).del(`/admin/quick-work/${scratch.id}`);
+    expect(gone.status).toBe(200);
+    expect(
+      (gone.body as Body<{ id: string; title: string; status: string }>).data,
+    ).toMatchObject({
+      id: scratch.id,
+      title: 'Scratch draft',
+      status: 'draft',
+    });
+    expect(await exists(scratch.id)).toBe(false);
+    expect(await exists(keep.id)).toBe(true);
+    expect(
+      (await adminList('draft')).rows.some((r) => r.id === scratch.id),
+    ).toBe(false);
+    // The student's own list no longer has it either.
+    const mine = (await h.as(lead).get('/quick-work/me')).body as Body<{
+      logs: { id: string }[];
+    }>;
+    expect(mine.data.logs.some((l) => l.id === scratch.id)).toBe(false);
+    // Deleting twice is a clean 404.
+    expect(
+      (await h.as(admin).del(`/admin/quick-work/${scratch.id}`)).status,
+    ).toBe(404);
+
+    // A submitted log (awaiting faculty) is removable without any extra confirmation.
+    const sent = await draft(
+      lead,
+      completeLog(lead, faculty, { title: 'Wrong submission' }),
+    );
+    await h.as(lead).post(`/quick-work/logs/${sent.id}/submit`).expect(201);
+    expect((await h.as(admin).del(`/admin/quick-work/${sent.id}`)).status).toBe(
+      200,
+    );
+    expect(await exists(sent.id)).toBe(false);
+
+    // Only CIEL PK admin may delete.
+    expect((await h.as(lead).del(`/admin/quick-work/${keep.id}`)).status).toBe(
+      403,
+    );
+    expect(
+      (await h.as(faculty).del(`/admin/quick-work/${keep.id}`)).status,
+    ).toBe(403);
+    expect((await h.as(null).del(`/admin/quick-work/${keep.id}`)).status).toBe(
+      401,
+    );
+    expect((await h.as(admin).del('/admin/quick-work/not-a-uuid')).status).toBe(
+      400,
+    );
+    expect(await exists(keep.id)).toBe(true);
+
+    // An approved log: refused until confirmed, then its hours and certificate go with it.
+    const done = await draft(
+      lead,
+      completeLog(lead, faculty, { title: 'Approved drive' }),
+    );
+    await h.as(lead).post(`/quick-work/logs/${done.id}/submit`).expect(201);
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${done.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    await finalApprove(done.id);
+    type Mine = {
+      logs: (LogView & { certificate: { code: string } | null })[];
+    };
+    const certificate = (
+      (await h.as(lead).get('/quick-work/me')).body as Body<Mine>
+    ).data.logs.find((l) => l.id === done.id)?.certificate;
+    expect(certificate?.code).toMatch(/^CIEL-QCI-/);
+    const approvedBefore = (await adminList('approved')).counts.approved;
+
+    const refused = await h.as(admin).del(`/admin/quick-work/${done.id}`);
+    expect(refused.status).toBe(409);
+    expect(messages(refused.body as Body<unknown>)).toMatch(
+      /approved.*1 participant's credited hours \(1\.00 h\).*1 issued certificate/i,
+    );
+    // ?confirmApproved must be exactly "true".
+    expect(
+      (await h.as(admin).del(`/admin/quick-work/${done.id}?confirmApproved=1`))
+        .status,
+    ).toBe(409);
+    expect(await exists(done.id)).toBe(true);
+    expect(
+      (await h.as(null).get(`/quick-work/certificates/${certificate!.code}`))
+        .status,
+    ).toBe(200);
+
+    const removed = await h
+      .as(admin)
+      .del(`/admin/quick-work/${done.id}?confirmApproved=true`);
+    expect(removed.status).toBe(200);
+    expect((removed.body as Body<Record<string, unknown>>).data).toMatchObject({
+      id: done.id,
+      status: 'approved',
+      participants: 1,
+      creditedParticipants: 1,
+      creditedMinutes: 60,
+      certificates: 1,
+    });
+    expect(await exists(done.id)).toBe(false);
+    expect((await adminList('approved')).counts.approved).toBe(
+      approvedBefore - 1,
+    );
+    // The issued certificate no longer verifies; participants went with the log.
+    expect(
+      (await h.as(null).get(`/quick-work/certificates/${certificate!.code}`))
+        .status,
+    ).toBe(404);
+    const parts = h.app.get<Repository<QuickWorkParticipant>>(
+      getRepositoryToken(QuickWorkParticipant),
+    );
+    expect(await parts.count({ where: { logId: done.id } })).toBe(0);
+    // The student's hours drop back, and the other logs are intact.
+    expect(
+      (
+        (await h.as(lead).get('/quick-work/me')).body as Body<Mine>
+      ).data.logs.some((l) => l.id === done.id),
+    ).toBe(false);
+    expect(await exists(keep.id)).toBe(true);
+  });
 });

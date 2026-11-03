@@ -1093,6 +1093,61 @@ export class QuickWorkService {
     };
   }
 
+  /**
+   * CIEL PK clean-up: remove a log of any status (test entries, duplicates, wrong submissions).
+   * Participants go with it (ON DELETE CASCADE) and every hours / stats / export figure is read
+   * live from the logs, so nothing else needs reversing. An APPROVED log is the exception worth a
+   * guard: deleting it takes back credited hours and voids the certificate IDs already issued, so
+   * it only proceeds with `confirmApproved`. The route is audited by the admin interceptor.
+   */
+  async deleteForAdmin(admin: Viewer, id: string, confirmApproved = false) {
+    const log = await this.loadLog(id);
+    const credited = log.participants.filter(isCreditedParticipant);
+    const creditedMinutes = credited.reduce(
+      (sum, p) => sum + attendanceMinutes(p),
+      0,
+    );
+    const certificates = log.participants.filter((p) =>
+      Boolean(p.certificateCode),
+    ).length;
+    const summary = {
+      id: log.id,
+      title: log.title,
+      status: log.status,
+      participants: log.participants.length,
+      creditedParticipants: credited.length,
+      creditedMinutes,
+      certificates,
+    };
+    const refuse = () =>
+      new ConflictException(
+        `This log is approved. Deleting it removes ${credited.length} participant${
+          credited.length === 1 ? "'s" : "s'"
+        } credited hours (${(creditedMinutes / 60).toFixed(2)} h) and voids ${certificates} issued certificate${
+          certificates === 1 ? '' : 's'
+        }. Confirm to delete it anyway.`,
+      );
+    if (log.status === 'approved' && !confirmApproved) throw refuse();
+
+    // Conditional on the status so a log approved a moment ago is never deleted unconfirmed.
+    const qb = this.logRepo
+      .createQueryBuilder()
+      .delete()
+      .from(QuickWorkLog)
+      .where('id = :id', { id: log.id });
+    if (!confirmApproved) qb.andWhere("status <> 'approved'");
+    const result = await qb.execute();
+    if (!result.affected) {
+      const still = await this.logRepo.exist({ where: { id: log.id } });
+      if (still) throw refuse();
+      throw new NotFoundException('Quick-work log not found');
+    }
+    this.logger.warn(
+      `Admin ${admin.id} deleted quick-work log ${log.id} ("${log.title}", ${log.status}, ${log.participants.length} participant(s), ${(creditedMinutes / 60).toFixed(2)} h credited, ${certificates} certificate(s))`,
+    );
+    return summary;
+  }
+
   /** Point a log at a different reviewing faculty member (wrong email, no account, left the university). */
   async reassignFaculty(
     admin: Viewer,

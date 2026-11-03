@@ -298,4 +298,20 @@ export class AdminQuickWorkController {
       data: await this.quickWork.adminReview(req.user, id, dto),
     };
   }
+  /** Clean-up: delete a log of any status. An approved log also needs `?confirmApproved=true`. */
+  @Delete(':id')
+  async remove(
+    @Request() req: AuthedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('confirmApproved') confirmApproved?: string,
+  ) {
+    return {
+      success: true,
+      data: await this.quickWork.deleteForAdmin(
+        req.user,
+        id,
+        confirmApproved === 'true',
+      ),
+    };
+  }
 }

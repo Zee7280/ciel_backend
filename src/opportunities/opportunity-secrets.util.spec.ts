@@ -101,3 +101,52 @@ describe('redactOpportunityContactDetails', () => {
     expect(out.supervision.contact).toBeUndefined();
   });
 });
+
+describe('redactOpportunityContactDetails — authorised partner_contact', () => {
+  it('keeps only the display fields of the response-level partner_contact block, while every other contact key is still dropped', () => {
+    const out = redactOpportunityContactDetails({
+      success: true,
+      data: {
+        title: 'Clean-up',
+        partner_contact: {
+          organization_name: 'Green Trust',
+          email: 'info@green.org',
+          whatsapp: '+923001234567',
+          phone: 'extra-field-must-not-leak',
+        },
+        supervision: { whatsapp_e164: '+923009998888', contact: 'fac@uni.edu' },
+        executing_organization: { official_email: 'o@org.org' },
+      },
+    }) as { data: Record<string, unknown> };
+    expect(out.data.partner_contact).toEqual({
+      organization_name: 'Green Trust',
+      email: 'info@green.org',
+      whatsapp: '+923001234567',
+    });
+    expect(out.data.supervision).toEqual({});
+    expect(out.data.executing_organization).toEqual({});
+  });
+
+  it('does not honour partner_contact anywhere else (list rows, nested objects, top level)', () => {
+    const block = { email: 'x@y.org', whatsapp: '+923001234567' };
+    const out = redactOpportunityContactDetails({
+      partner_contact: block,
+      data: [{ partner_contact: block }],
+      other: { data: { partner_contact: block } },
+    }) as Record<string, unknown>;
+    expect(JSON.stringify(out)).not.toMatch(/x@y\.org|923001234567/);
+  });
+
+  it('collapses an empty or malformed block to null', () => {
+    const run = (pc: unknown) =>
+      (
+        redactOpportunityContactDetails({ data: { partner_contact: pc } }) as {
+          data: { partner_contact: unknown };
+        }
+      ).data.partner_contact;
+    expect(run(null)).toBeNull();
+    expect(run('a@b.co')).toBeNull();
+    expect(run([{ email: 'a@b.co' }])).toBeNull();
+    expect(run({ organization_name: 'Only name' })).toBeNull();
+  });
+});

@@ -44,6 +44,24 @@ export function redactOpportunitySecrets<T>(value: T, depth = 0): T {
 const CONTACT_KEY_RE =
   /^(email|official_email|officialEmail|partner_email|external_partner_email|contact_email|contactEmail|contact_phone|contactPhone|whatsapp|whatsapp_e164|phone|mobile|student_contact|creator_email|(?:[a-z_]*_)?(?:whatsapp|phone|mobile)(?:_[a-z0-9]+)?)$/i;
 
+/** Rebuilds the authorised block from its display fields only (never forwards extra keys). */
+function keepPartnerContactBlock(value: unknown): {
+  organization_name: string | null;
+  email: string | null;
+  whatsapp: string | null;
+} | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown) =>
+    typeof x === 'string' && x.trim() ? x.trim() : null;
+  const block = {
+    organization_name: str(v.organization_name),
+    email: str(v.email),
+    whatsapp: str(v.whatsapp),
+  };
+  return block.email || block.whatsapp ? block : null;
+}
+
 /**
  * Third-party contact details (faculty supervisor, partner / executing-organization contacts,
  * WhatsApp numbers, the creator's email) belong to the opportunity's owner, its designated
@@ -66,6 +84,14 @@ export function redactOpportunityContactDetails<T>(
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    // `partner_contact` is attached by the service AFTER it decided this viewer may see the
+    // creating organisation's contact (signed-in + partner-created). Only that one response
+    // position survives, and only its three display fields; anything else named like a contact
+    // is still dropped below.
+    if (k === 'partner_contact' && parentKey === 'data' && depth === 1) {
+      out[k] = keepPartnerContactBlock(v);
+      continue;
+    }
     if (CONTACT_KEY_RE.test(k)) continue;
     if (k === 'contact' && parentKey === 'supervision') continue;
     if (k === 'approvalHistory' && Array.isArray(v)) {

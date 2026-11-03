@@ -81,6 +81,7 @@ import {
 import { redactOpportunityContactDetails } from './opportunity-secrets.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import { resolvePartnerContact } from './opportunity-partner-contact.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
@@ -5353,7 +5354,7 @@ export class OpportunitiesService {
     const creator = opportunity.creatorId
       ? await this.usersRepository.findOne({
           where: { id: opportunity.creatorId },
-          select: ['id', 'name', 'email', 'phone'],
+          select: ['id', 'name', 'email', 'phone', 'role'],
         })
       : null;
 
@@ -5372,9 +5373,17 @@ export class OpportunitiesService {
         }
       : null;
 
+    // A partner / NGO listing also shows the organisation's own email and WhatsApp (what the
+    // partner typed on the request form) to every signed-in viewer, like the creator block above.
+    // Anonymous visitors never reach this endpoint (JwtAuthGuard).
+    const partnerContact = creatorContactVisible
+      ? resolvePartnerContact(opportunity, creator)
+      : null;
+
     const result = {
       ...opportunity,
       creator: creatorBlock,
+      partner_contact: partnerContact,
       // What THIS viewer may actually do with the record, so the UI never offers a button the
       // API would refuse (e.g. "Edit" to an executing-org contact or a university observer).
       viewer_access: {
@@ -5389,6 +5398,7 @@ export class OpportunitiesService {
     return {
       ...redactOpportunityContactDetails(result),
       creator: creatorBlock,
+      partner_contact: partnerContact,
     };
   }
 

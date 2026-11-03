@@ -1,4 +1,8 @@
 import { academicDepartmentsMatch } from '../common/academic-department.util';
+import {
+  isPartnerCreatedOpportunity,
+  resolvePartnerContact,
+} from '../opportunities/opportunity-partner-contact.util';
 import { randomInt, randomUUID } from 'crypto';
 import {
   resolveTeamSeatCap,
@@ -1964,12 +1968,18 @@ export class StudentsService {
     const volunteersRequired =
       timelineOf(opportunity)?.volunteers_required || 0;
     const applyState = await this.loadApplyMaintenanceState();
+    // A partner / NGO listing shows the organisation's own email + WhatsApp to signed-in students
+    // (the browse-response filter keeps only this block; every other contact field stays stripped).
+    const partnerContact = userId
+      ? await this.partnerContactForBrowse(opportunity)
+      : null;
 
     return {
       success: true,
       apply_maintenance: this.applyMaintenancePayload(applyState),
       data: {
         ...opportunity,
+        partner_contact: partnerContact,
         application_status: applicationStatus,
         application_stage: applicationStage,
         application_internal_status: applicationInternalStatus,
@@ -1985,6 +1995,22 @@ export class StudentsService {
         detail_view: buildOpportunityDetailView(opportunity),
       },
     };
+  }
+
+  /** Creating organisation's contact for a partner-created listing, else null. Never throws. */
+  private async partnerContactForBrowse(opportunity: Opportunity) {
+    if (!isPartnerCreatedOpportunity(opportunity)) return null;
+    try {
+      const creator = opportunity.creatorId
+        ? await this.usersRepository.findOne({
+            where: { id: opportunity.creatorId },
+            select: ['id', 'email', 'phone', 'role'],
+          })
+        : null;
+      return resolvePartnerContact(opportunity, creator);
+    } catch {
+      return null;
+    }
   }
 
   async getRecommendedOpportunities() {

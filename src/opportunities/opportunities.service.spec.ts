@@ -4485,6 +4485,95 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       ),
     ).resolves.toBe(false);
   });
+
+  describe('detail: partner organisation contact on the card', () => {
+    const liveOpp = {
+      status: 'live',
+      workflowStage: 'live',
+      admin_approved: true,
+      visibility: 'public',
+    };
+    const withCreator = (
+      service: ReturnType<typeof makeAccessService>['service'],
+      role: string,
+    ) => {
+      privates(service).usersRepository = {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'creator-1',
+          name: 'Ayesha',
+          email: 'owner@ngo.org',
+          phone: '+923000000000',
+          role,
+        }),
+      };
+    };
+
+    it('a signed-in student sees the organisation email + WhatsApp of a partner-created listing, but not the raw contact fields', async () => {
+      const { service } = makeAccessService({
+        ...liveOpp,
+        isStudentCreated: false,
+        organizationId: 'host-org',
+        executing_organization: {
+          name: 'Green Pakistan Trust',
+          official_email: 'info@greenpk.org',
+        },
+        supervision: {
+          whatsapp_e164: '+923001234567',
+          contact: 'info@greenpk.org',
+        },
+      });
+      withCreator(service, 'partner');
+      const data = await service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('stu@uni.edu', 'student'),
+      );
+      expect(data?.partner_contact).toEqual({
+        organization_name: 'Green Pakistan Trust',
+        email: 'info@greenpk.org',
+        whatsapp: '+923001234567',
+      });
+      // the privacy rule for everything else is unchanged
+      expect(
+        (data?.supervision as Record<string, unknown>)?.whatsapp_e164,
+      ).toBeUndefined();
+      expect(
+        (data?.executing_organization as Record<string, unknown>)
+          ?.official_email,
+      ).toBeUndefined();
+    });
+
+    it('a student-created listing exposes no partner contact', async () => {
+      const { service } = makeAccessService({
+        ...liveOpp,
+        isStudentCreated: true,
+        organizationId: null,
+        executing_organization: { official_email: 'x@y.org' },
+        supervision: { whatsapp_e164: '+923001234567' },
+      });
+      withCreator(service, 'student');
+      const data = await service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('stu@uni.edu', 'student'),
+      );
+      expect(data?.partner_contact).toBeNull();
+    });
+
+    it('a faculty-created listing exposes no partner contact', async () => {
+      const { service } = makeAccessService({
+        ...liveOpp,
+        isStudentCreated: false,
+        facultyId: 'fac-1',
+        organizationId: null,
+        supervision: { whatsapp_e164: '+923001234567' },
+      });
+      withCreator(service, 'faculty');
+      const data = await service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('stu@uni.edu', 'student'),
+      );
+      expect(data?.partner_contact).toBeNull();
+    });
+  });
 });
 
 describe('OpportunitiesService — update() mass-assignment hardening', () => {

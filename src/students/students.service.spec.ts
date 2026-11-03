@@ -258,6 +258,88 @@ describe('StudentsService impact history', () => {
     expect(result.data.id).toBe('opp-hidden');
   });
 
+  describe('getOpportunityById: partner organisation contact', () => {
+    const liveRow = {
+      id: 'opp-partner-1',
+      isStudentCreated: false,
+      facultyId: null,
+      organizationId: 'org-1',
+      creatorId: 'creator-1',
+      status: 'active',
+      admin_approved: true,
+      workflowStage: 'live',
+      types: [],
+      organization: { name: 'Green Pakistan Trust' },
+      timeline: {},
+      objectives: {},
+      executing_organization: {
+        name: 'Green Pakistan Trust',
+        official_email: 'info@greenpk.org',
+      },
+      supervision: { whatsapp_e164: '+923001234567' },
+    };
+    const build = (row: Record<string, unknown>, role: string) =>
+      makeService({
+        opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(row) },
+        usersRepository: {
+          findOne: jest.fn().mockResolvedValue({
+            id: 'creator-1',
+            email: 'owner@ngo.org',
+            phone: null,
+            role,
+          }),
+        },
+        participantRepository: {
+          findOne: jest.fn().mockResolvedValue(null),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        opportunityApplicationsService: {
+          resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+            applicationStatus: null,
+            applicationStage: null,
+            applicationInternalStatus: null,
+            hasApplied: false,
+          }),
+          countSeatsInFlight: jest.fn().mockResolvedValue(0),
+        },
+      });
+
+    it('attaches the organisation email + WhatsApp for a signed-in student', async () => {
+      const result = await build(liveRow, 'partner').getOpportunityById(
+        'opp-partner-1',
+        'student-1',
+      );
+      expect(result.data.partner_contact).toEqual({
+        organization_name: 'Green Pakistan Trust',
+        email: 'info@greenpk.org',
+        whatsapp: '+923001234567',
+      });
+    });
+
+    it('attaches nothing without a signed-in user, for student-created or faculty-created listings', async () => {
+      expect(
+        (await build(liveRow, 'partner').getOpportunityById('opp-partner-1'))
+          .data.partner_contact,
+      ).toBeNull();
+      expect(
+        (
+          await build(
+            { ...liveRow, isStudentCreated: true, organizationId: null },
+            'student',
+          ).getOpportunityById('opp-partner-1', 'student-1')
+        ).data.partner_contact,
+      ).toBeNull();
+      expect(
+        (
+          await build(
+            { ...liveRow, facultyId: 'fac-1', organizationId: null },
+            'faculty',
+          ).getOpportunityById('opp-partner-1', 'student-1')
+        ).data.partner_contact,
+      ).toBeNull();
+    });
+  });
+
   it('attributes a faculty-created opportunity (no Organization row) to the faculty institution instead of "Unknown"', async () => {
     const opportunities = [
       {

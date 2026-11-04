@@ -126,6 +126,10 @@ export class QuickWorkLog {
   @Column({ type: 'int', nullable: true })
   peopleReached: number | null;
 
+  /** Optional target for "Reach against target" on the review flashcard. */
+  @Column({ type: 'int', nullable: true })
+  peopleTarget: number | null;
+
   @Column({
     type: 'varchar',
     length: 40,

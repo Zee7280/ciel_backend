@@ -198,6 +198,22 @@ describe('quick-work rules', () => {
     );
   });
 
+  it('a people target is optional but must be a whole number of 1 or more', () => {
+    const msg = 'People target must be a whole number of 1 or more.';
+    expect(quickWorkSubmitErrors(complete({ peopleTarget: 40 }), NOW)).toEqual(
+      [],
+    );
+    expect(
+      quickWorkSubmitErrors(complete({ peopleTarget: null }), NOW),
+    ).toEqual([]);
+    expect(quickWorkSubmitErrors(complete({ peopleTarget: 0 }), NOW)).toContain(
+      msg,
+    );
+    expect(
+      quickWorkSubmitErrors(complete({ peopleTarget: 2.5 }), NOW),
+    ).toContain(msg);
+  });
+
   it('the faculty reviewer cannot be one of the participants', () => {
     expect(
       quickWorkSubmitErrors(complete({ facultyEmail: 'A@x.pk' }), NOW),

@@ -281,6 +281,7 @@ export type QuickWorkSubmitInput = {
   endTime: string | null;
   location: string;
   peopleReached: number | null;
+  peopleTarget?: number | null;
   summary: string;
   visibility: string;
   consent: boolean;
@@ -440,6 +441,12 @@ export function quickWorkSubmitErrors(
     (!Number.isInteger(log.peopleReached) || log.peopleReached < 0)
   ) {
     e.push('People reached must be a non-negative whole number.');
+  }
+  if (
+    log.peopleTarget != null &&
+    (!Number.isInteger(log.peopleTarget) || log.peopleTarget < 1)
+  ) {
+    e.push('People target must be a whole number of 1 or more.');
   }
 
   return Array.from(new Set(e));

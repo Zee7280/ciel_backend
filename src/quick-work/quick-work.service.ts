@@ -321,6 +321,9 @@ export class QuickWorkService {
     if (dto.peopleReached !== undefined) {
       log.peopleReached = dto.peopleReached ?? null;
     }
+    if (dto.peopleTarget !== undefined) {
+      log.peopleTarget = dto.peopleTarget ?? null;
+    }
     if (dto.visibility !== undefined) log.visibility = dto.visibility;
     if (dto.consent !== undefined) log.consent = dto.consent;
     if (dto.honest !== undefined) log.honest = dto.honest;
@@ -1735,6 +1738,7 @@ export class QuickWorkService {
       sdg: log.sdg,
       summary: log.summary,
       peopleReached: log.peopleReached,
+      peopleTarget: log.peopleTarget,
       visibility: log.visibility,
       evidence: log.evidence ?? [],
       consent: log.consent,
@@ -1781,6 +1785,7 @@ export class QuickWorkService {
       partnerDetails: [],
       summary: '',
       peopleReached: null,
+      peopleTarget: null,
       evidence: [],
       reviewNote: null,
       certificate: null,

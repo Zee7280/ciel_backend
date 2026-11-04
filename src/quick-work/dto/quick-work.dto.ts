@@ -245,6 +245,12 @@ export class SaveQuickWorkLogDto {
   peopleReached?: number | null;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10_000_000)
+  peopleTarget?: number | null;
+
+  @IsOptional()
   @IsIn([...QUICK_WORK_VISIBILITY])
   visibility?: string;
 

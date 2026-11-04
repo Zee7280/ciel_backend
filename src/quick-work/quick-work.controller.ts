@@ -19,7 +19,9 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+import { MembershipActiveGuard } from '../organization-membership/membership-active.guard';
 import { QuickWorkService } from './quick-work.service';
+import { QuickImpactPartnerService } from './quick-impact-partner.service';
 import {
   AdminQuickWorkListQuery,
   AdminQuickWorkReassignDto,
@@ -312,6 +314,30 @@ export class AdminQuickWorkController {
         id,
         confirmApproved === 'true',
       ),
+    };
+  }
+}
+
+/**
+ * Partner side: the approved Quick Community Impact activities that name the signed-in organisation
+ * (by email) as host or partner, for My Impact Wall. Counts and the activity only: no student names or contacts.
+ */
+@Controller('partner/quick-impact')
+@UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
+@Roles(
+  UserRole.UNIVERSITY,
+  UserRole.NGO,
+  UserRole.CORPORATE,
+  UserRole.ORGANIZATION_ADMIN,
+)
+export class PartnerQuickImpactController {
+  constructor(private readonly partnerImpact: QuickImpactPartnerService) {}
+
+  @Get()
+  async mine(@Request() req: AuthedRequest) {
+    return {
+      success: true,
+      data: await this.partnerImpact.listForPartner(req.user.id),
     };
   }
 }

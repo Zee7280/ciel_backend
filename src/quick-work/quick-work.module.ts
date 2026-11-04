@@ -10,6 +10,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
 import { QuickWorkLog } from './entities/quick-work-log.entity';
 import { QuickWorkParticipant } from './entities/quick-work-participant.entity';
 import { QuickWorkService } from './quick-work.service';
+import { QuickImpactPartnerService } from './quick-impact-partner.service';
 import {
   AdminQuickWorkController,
   FacultyQuickWorkController,
@@ -17,6 +18,7 @@ import {
   QuickWorkEmailResponseController,
   QuickWorkFacultyEmailReviewController,
   QuickWorkController,
+  PartnerQuickImpactController,
 } from './quick-work.controller';
 
 @Module({
@@ -40,7 +42,8 @@ import {
     QuickWorkController,
     FacultyQuickWorkController,
     AdminQuickWorkController,
+    PartnerQuickImpactController,
   ],
-  providers: [QuickWorkService],
+  providers: [QuickWorkService, QuickImpactPartnerService],
 })
 export class QuickWorkModule {}

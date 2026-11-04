@@ -3252,4 +3252,131 @@ export class MailService {
       );
     }
   }
+
+  /**
+   * Quick Community Impact: once CIEL PK gives final approval, the host / partner organisation gets the
+   * activity's one-page flashcard (PDF) and a link to register as a Partner and see it on My Impact Wall.
+   * Returns whether it was sent; never throws.
+   */
+  async sendQuickImpactPartnerFlashcard(input: {
+    to: string;
+    contactName?: string;
+    opportunity: string;
+    venue: string;
+    date: string;
+    description: string;
+    hours: number;
+    students: number;
+    /** The address already has a partner account: invite them to sign in instead of registering. */
+    existingAccount?: boolean;
+    pdf: Buffer;
+  }): Promise<boolean> {
+    const to = String(input.to || '').trim();
+    if (!to) return false;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const supportEmail =
+      this.configService.get<string>('SUPPORT_EMAIL') || 'support@cielpk.com';
+    const website = (
+      this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com'
+    ).replace(/\/+$/, '');
+    const e = (v: string) => this.escHtmlPlain(v);
+    const name = input.contactName?.trim() || 'Partner';
+    const description = input.description.trim().slice(0, 600);
+    const signIn = Boolean(input.existingAccount);
+    // Sign in (existing partner account) or register as a Partner with the address filled in; both land on My Impact Wall.
+    const registerHref = signIn
+      ? this.buildFrontendLink('/login', { next: '/dashboard/partner/impact' })
+      : this.buildFrontendLink('/signup', {
+          role: 'ngo',
+          email: to,
+          next: '/dashboard/partner/impact',
+        });
+    const rows: [string, string][] = [
+      ['Opportunity', input.opportunity],
+      ['Venue', input.venue],
+      ['Event date(s)', input.date],
+      ['Event description', description || 'Not provided'],
+      ['Hours contributed', `${input.hours} h (verified)`],
+      ['Students involved', String(input.students)],
+    ];
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; color:#16313d; line-height:1.6;">
+        <p>Dear ${e(name)},</p>
+        <p>We&rsquo;re pleased to share the results of the approved community engagement report for your opportunity.</p>
+        <h3 style="color:#0d4f87;margin-bottom:6px;">Opportunity details</h3>
+        <ul style="padding-left:20px;">
+          ${rows.map(([k, v]) => `<li><strong>${e(k)}:</strong> ${e(v)}</li>`).join('\n          ')}
+        </ul>
+        <p>Your community impact flashcard is attached, with a summary of the activity and its results. Thank you for hosting this opportunity and contributing your time and support to the students and community.</p>
+        ${
+          signIn
+            ? `<p>Your organization already has a CIEL PK account. Sign in to see this and your other results on My Impact Wall:</p>
+        <div style="text-align:center;margin:24px 0;">
+          <a href="${registerHref}" style="background-color:#0d4f87;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open My Impact Wall</a>
+        </div>`
+            : `<p>To view your results and stay connected with future opportunities, please register on CIEL PK and select <strong>Partner</strong> as your account category:</p>
+        <div style="text-align:center;margin:24px 0;">
+          <a href="${registerHref}" style="background-color:#0d4f87;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Register as a partner</a>
+        </div>
+        <p>Once registered, you can access your organization&rsquo;s results on CIEL PK.</p>`
+        }
+        <p style="margin-top:24px;">With appreciation,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span><br><span style="font-size:13px;color:#64748b;"><a href="mailto:${supportEmail}">${e(supportEmail)}</a> | <a href="${website}">${e(website.replace(/^https?:\/\//, ''))}</a></span></p>
+      </div>
+    `;
+    const text = [
+      `Dear ${name},`,
+      '',
+      'We’re pleased to share the results of the approved community engagement report for your opportunity.',
+      '',
+      'Opportunity details',
+      ...rows.map(([k, v]) => `* ${k}: ${v}`),
+      '',
+      'Your community impact flashcard is attached, with a summary of the activity and its results. Thank you for hosting this opportunity and contributing your time and support to the students and community.',
+      '',
+      ...(signIn
+        ? [
+            'Your organization already has a CIEL PK account. Sign in to see this and your other results on My Impact Wall:',
+            `Open My Impact Wall: ${registerHref}`,
+          ]
+        : [
+            'To view your results and stay connected with future opportunities, please register on CIEL PK and select Partner as your account category:',
+            `Register as a partner: ${registerHref}`,
+            '',
+            'Once registered, you can access your organization’s results on CIEL PK.',
+          ]),
+      '',
+      'With appreciation,',
+      'CIEL PK Team',
+      'Community Impact Education Lab',
+      `${supportEmail} | ${website}`,
+    ].join('\n');
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: `Your community impact flashcard: ${input.opportunity}`.slice(
+          0,
+          200,
+        ),
+        text,
+        html,
+        attachments: [
+          {
+            filename: 'CIEL-PK-Quick-Impact-Flashcard.pdf',
+            content: input.pdf,
+            contentType: 'application/pdf',
+          },
+        ],
+      });
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed Quick Impact partner flashcard email to ${to}`,
+        (error as Error)?.stack,
+      );
+      return false;
+    }
+  }
 }

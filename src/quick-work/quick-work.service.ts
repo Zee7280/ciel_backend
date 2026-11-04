@@ -17,6 +17,7 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { QuickImpactPartnerService } from './quick-impact-partner.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { universityNamesMatch } from '../opportunities/university-scope.util';
 import {
@@ -118,6 +119,7 @@ export class QuickWorkService {
     private readonly universityScope: FacultyUniversityScopeService,
     @Optional() private readonly mailService?: MailService,
     @Optional() private readonly notificationsService?: NotificationsService,
+    @Optional() private readonly partnerImpact?: QuickImpactPartnerService,
     @Optional()
     @InjectRepository(FacultyUniversityConfirmation)
     private readonly facultyConfirmations?: Repository<FacultyUniversityConfirmation>,
@@ -865,7 +867,11 @@ export class QuickWorkService {
       );
     }
     const decided = await this.loadLog(log.id);
-    if (status === 'approved') await this.issueCertificates(decided);
+    if (status === 'approved') {
+      await this.issueCertificates(decided);
+      // Host / partner flashcard emails: awaited (serverless would drop a floating promise) but capped.
+      await this.partnerImpact?.onApprovedWithin(decided.id);
+    }
     return this.signEvidence(this.toView(decided, null));
   }
 

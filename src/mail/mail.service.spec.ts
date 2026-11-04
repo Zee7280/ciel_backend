@@ -197,4 +197,46 @@ describe('MailService — SMTP reliability', () => {
       }),
     ).rejects.toThrow(/Too many recipients/);
   });
+  it('Quick Impact partner email attaches the PDF flashcard and switches copy for an existing account', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    const input = {
+      to: 'health@bnu.edu.pk',
+      contactName: 'BNU <Health> Society',
+      opportunity: 'Pinktober awareness circle',
+      venue: 'Lahore',
+      date: '3 Nov 2026',
+      description: 'We ran a desk.',
+      hours: 1.5,
+      students: 2,
+      pdf: Buffer.from('%PDF-1.4 test'),
+    };
+    expect(await service.sendQuickImpactPartnerFlashcard(input)).toBe(true);
+    const mail = sendMailReliable.mock.calls[0][0];
+    expect(mail.to).toBe('health@bnu.edu.pk');
+    expect(String(mail.html)).toContain('Register as a partner');
+    expect(String(mail.html)).toContain('BNU &lt;Health&gt; Society');
+    expect(String(mail.html)).toContain('role=ngo');
+    expect(String(mail.html)).toContain('%2Fdashboard%2Fpartner%2Fimpact');
+    expect(mail.attachments).toEqual([
+      expect.objectContaining({
+        filename: 'CIEL-PK-Quick-Impact-Flashcard.pdf',
+        contentType: 'application/pdf',
+      }),
+    ]);
+
+    await service.sendQuickImpactPartnerFlashcard({
+      ...input,
+      existingAccount: true,
+    });
+    const second = sendMailReliable.mock.calls[1][0];
+    expect(String(second.html)).toContain('Open My Impact Wall');
+    expect(String(second.html)).not.toContain('Register as a partner');
+
+    sendMailReliable.mockRejectedValueOnce(new Error('smtp'));
+    expect(await service.sendQuickImpactPartnerFlashcard(input)).toBe(false);
+  });
 });

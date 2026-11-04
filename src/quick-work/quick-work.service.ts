@@ -26,6 +26,7 @@ import {
   QuickWorkLog,
 } from './entities/quick-work-log.entity';
 import { QuickWorkParticipant } from './entities/quick-work-participant.entity';
+import { QuickWorkPendingInvite } from './entities/quick-work-pending-invite.entity';
 import { FacultyUniversityConfirmation } from '../users/entities/faculty-university-confirmation.entity';
 import { deriveAesKey } from '../common/aes-gcm.util';
 import { resolveJwtSecret } from '../auth/jwt-secret.util';
@@ -95,9 +96,25 @@ const FACULTY_ACTIVE_STATUSES = ['active', 'approved'];
  */
 const FACULTY_EMAILS_PER_LEAD_PER_DAY = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Anti-abuse: a student can name any address as a teammate, so the "create your account" email goes
+ * to at most this many new unregistered addresses per lead per day.
+ */
+const SIGNUP_INVITES_PER_LEAD_PER_DAY = 20;
 
-/** What an emailed confirm / decline link carries: the log and the teammate's row. */
-type EmailResponseToken = { l: string; p?: string };
+type PendingInviteView = {
+  id: string;
+  email: string;
+  name: string;
+  studentId: string;
+  contact: string | null;
+};
+
+/**
+ * What an emailed confirm / decline link carries: the log and the teammate's row (`p`), or, for a
+ * teammate who had no CIEL student account yet, the invited email (`e`) until they sign up.
+ */
+type EmailResponseToken = { l: string; p?: string; e?: string };
 
 type Viewer = { id: string };
 type ReviewOutcome = 'admin_review' | 'approved' | 'changes' | 'rejected';
@@ -111,6 +128,8 @@ export class QuickWorkService {
     private readonly logRepo: Repository<QuickWorkLog>,
     @InjectRepository(QuickWorkParticipant)
     private readonly participantRepo: Repository<QuickWorkParticipant>,
+    @InjectRepository(QuickWorkPendingInvite)
+    private readonly pendingRepo: Repository<QuickWorkPendingInvite>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(AttendanceLog)
@@ -129,6 +148,15 @@ export class QuickWorkService {
 
   /** Student dashboard: every log I lead or take part in, invitations, and my own hour totals. */
   async listMine(viewer: Viewer) {
+    // A teammate who signed up after being named picks up their invitations here (never blocks the list).
+    try {
+      const me = await this.userRepo.findOne({ where: { id: viewer.id } });
+      if (me) await this.claimPendingInvites(me);
+    } catch (e) {
+      this.logger.warn(
+        `Quick-work pending invite claim failed: ${(e as Error).message}`,
+      );
+    }
     const mine = await this.participantRepo.find({
       where: { userId: viewer.id },
       select: ['logId'],
@@ -152,8 +180,10 @@ export class QuickWorkService {
         await this.issueCertificates(log);
       }
     }
-    const views = await Promise.all(
-      logs.map((log) => this.signEvidence(this.toView(log, viewer.id))),
+    const views = await this.attachPendingInvites(
+      await Promise.all(
+        logs.map((log) => this.signEvidence(this.toView(log, viewer.id))),
+      ),
     );
     const own = (v: (typeof views)[number]) =>
       v.participants.find((p) => p.userId === viewer.id);
@@ -179,7 +209,7 @@ export class QuickWorkService {
     if (!log.participants.some((p) => p.userId === viewer.id)) {
       throw new NotFoundException('Quick-work log not found');
     }
-    return this.signEvidence(this.toView(log, viewer.id));
+    return this.leadView(log, viewer.id);
   }
 
   /** Faculty review queue: logs naming this faculty member's email, once submitted. */
@@ -335,7 +365,7 @@ export class QuickWorkService {
       log.evidence = this.checkedEvidence(log.leadUserId, dto.evidence);
     }
 
-    const invited = await this.reconcileTeam(log, dto);
+    const { invited, signupInvites } = await this.reconcileTeam(log, dto);
 
     if (dto.attendance !== undefined) {
       const byEmail = new Map(
@@ -364,10 +394,11 @@ export class QuickWorkService {
       );
     }
     if (invited.length) mails.push(this.emailInvites(log, lead.name, invited));
+    if (signupInvites.length) {
+      mails.push(this.emailSignupInvites(log, lead.name, signupInvites));
+    }
     await settleWithin(Promise.all(mails), MAIL_WAIT_MS);
-    return this.signEvidence(
-      this.toView(await this.loadLog(log.id), viewer.id),
-    );
+    return this.leadView(await this.loadLog(log.id), viewer.id);
   }
 
   async deleteDraft(viewer: Viewer, id: string) {
@@ -416,33 +447,48 @@ export class QuickWorkService {
 
   /** What the emailed link is about, for the confirmation page. Opening it never records an answer. */
   async emailResponsePreview(token: string) {
-    const { log, kind, participant } = await this.resolveEmailToken(token);
+    const resolved = await this.resolveEmailToken(token);
+    const { log } = resolved;
     const lead = log.participants.find((p) => p.isLead);
+    const needsSignup = resolved.kind === 'signup';
+    const participant = needsSignup ? null : resolved.participant;
     const answer =
-      participant.joinStatus === 'joined'
+      participant?.joinStatus === 'joined'
         ? 'accepted'
-        : participant.joinStatus === 'declined'
+        : participant?.joinStatus === 'declined'
           ? 'declined'
           : 'pending';
     return {
-      kind,
+      kind: 'member' as const,
       title: log.title,
       activityDate: log.activityDate,
       location: log.location,
       university: log.university,
       leadName: lead?.name ?? '',
       facultyName: log.facultyName,
-      name: participant.name,
+      name: participant?.name ?? (needsSignup ? resolved.pending.name : ''),
       participants: log.participants.length,
       answer,
       open: QUICK_WORK_EDITABLE.includes(log.status),
+      // The teammate has no CIEL student account yet: the page sends them to sign up first.
+      needsSignup,
+      signupEmail: needsSignup ? resolved.pending.email : null,
     };
   }
 
   /** Records the answer from an emailed link: the same effect as answering on the dashboard. */
   async emailRespond(token: string, accept: boolean) {
-    const { log, participant } = await this.resolveEmailToken(token);
-    await this.respondToInvite({ id: participant.userId }, log.id, accept);
+    const resolved = await this.resolveEmailToken(token);
+    if (resolved.kind === 'signup') {
+      throw new BadRequestException(
+        `Create your CIEL student account with ${resolved.pending.email} first, then come back to this link or answer from your Quick Impact Log.`,
+      );
+    }
+    await this.respondToInvite(
+      { id: resolved.participant.userId },
+      resolved.log.id,
+      accept,
+    );
     return this.emailResponsePreview(token);
   }
 
@@ -481,6 +527,29 @@ export class QuickWorkService {
       relations: ['participants'],
     });
     if (!log) throw invalid;
+    if (data.e) {
+      // Sent to a teammate who had no CIEL account: once they sign up, the link works like any other.
+      const email = normalizeEmail(data.e);
+      const joined = log.participants.find(
+        (p) => !p.isLead && normalizeEmail(p.email) === email,
+      );
+      if (joined) return { log, kind: 'member' as const, participant: joined };
+      const pending = await this.pendingRepo.findOne({
+        where: { logId: log.id, email },
+      });
+      if (!pending) throw invalid;
+      const account = await this.userRepo
+        .createQueryBuilder('u')
+        .where('LOWER(u.email) = :email', { email })
+        .getOne();
+      if (account) {
+        const [claimed] = await this.claimPendingInvites(account, log.id);
+        if (claimed) {
+          return { log, kind: 'member' as const, participant: claimed };
+        }
+      }
+      return { log, kind: 'signup' as const, pending };
+    }
     const participant = log.participants.find(
       (p) => p.id === data.p && !p.isLead,
     );
@@ -687,6 +756,7 @@ export class QuickWorkService {
         participants: log.participants,
       }),
       ...(await this.claimErrors(log)),
+      ...(await this.pendingSignupErrors(log)),
     ];
     if (errors.length) throw new BadRequestException(errors);
 
@@ -1441,15 +1511,22 @@ export class QuickWorkService {
     return errors;
   }
 
-  /** Apply the teammate list; returns participants newly invited (to notify after saving). */
+  /**
+   * Apply the teammate list. Returns the participants newly invited (to notify after saving) and
+   * the teammates with no CIEL student account yet, who are kept as pending invites and emailed a
+   * link to sign up.
+   */
   private async reconcileTeam(
     log: QuickWorkLog,
     dto: SaveQuickWorkLogDto,
-  ): Promise<QuickWorkParticipant[]> {
+  ): Promise<{
+    invited: QuickWorkParticipant[];
+    signupInvites: QuickWorkPendingInvite[];
+  }> {
     const lead = log.participants.find((p) => p.isLead) as QuickWorkParticipant;
     let wanted = dto.teammates;
     if (log.mode === 'solo') wanted = [];
-    if (wanted === undefined) return [];
+    if (wanted === undefined) return { invited: [], signupInvites: [] };
 
     const seen = new Set<string>();
     const desired: {
@@ -1506,6 +1583,20 @@ export class QuickWorkService {
       : [];
     const userByEmail = new Map(users.map((u) => [normalizeEmail(u.email), u]));
 
+    // Teammates still waiting to sign up: drop the ones the lead removed, keep (and refresh) the rest.
+    const pendingNow = await this.pendingRepo.find({
+      where: { logId: log.id },
+    });
+    const pendingGone = pendingNow.filter((p) => !seen.has(p.email));
+    if (pendingGone.length) {
+      await this.pendingRepo.delete({ id: In(pendingGone.map((p) => p.id)) });
+    }
+    const pendingByEmail = new Map(
+      pendingNow.filter((p) => seen.has(p.email)).map((p) => [p.email, p]),
+    );
+    const signupInvites: QuickWorkPendingInvite[] = [];
+    let signupDayCount: number | null = null;
+
     const invited: QuickWorkParticipant[] = [];
     for (const d of desired) {
       const existing = keptByEmail.get(d.email);
@@ -1516,9 +1607,43 @@ export class QuickWorkService {
         continue;
       }
       const user = userByEmail.get(d.email);
-      if (!user || user.role !== UserRole.STUDENT) {
+      if (!user) {
+        // No CIEL account yet: keep a pending invite and email them to sign up as a student.
+        const pending = pendingByEmail.get(d.email);
+        if (pending) {
+          if (d.studentId !== undefined) {
+            pending.studentId = d.studentId.slice(0, 60);
+          }
+          if (d.contact !== undefined) pending.contact = d.contact;
+          if (d.name) pending.name = d.name.slice(0, 100);
+          await this.pendingRepo.save(pending);
+          continue;
+        }
+        signupDayCount ??= await this.signupInvitesToday(log.leadUserId);
+        if (
+          signupDayCount + signupInvites.length >=
+          SIGNUP_INVITES_PER_LEAD_PER_DAY
+        ) {
+          throw new BadRequestException(
+            `You have invited the maximum number of new students for today. Ask ${d.email} to sign up as a student at cielpk.com, then add them again.`,
+          );
+        }
+        signupInvites.push(
+          await this.pendingRepo.save(
+            this.pendingRepo.create({
+              logId: log.id,
+              email: d.email,
+              name: (d.name || '').slice(0, 100),
+              studentId: (d.studentId || '').slice(0, 60),
+              contact: d.contact ?? null,
+            }),
+          ),
+        );
+        continue;
+      }
+      if (user.role !== UserRole.STUDENT) {
         throw new BadRequestException(
-          `No CIEL student account uses ${d.email}. Ask your teammate to sign up as a student first.`,
+          `${d.email} belongs to a CIEL account that is not a student account, so it cannot be added as a teammate.`,
         );
       }
       if (!ACTIVE_STUDENT_STATUSES.includes(user.status)) {
@@ -1539,9 +1664,24 @@ export class QuickWorkService {
       });
       kept.push(p);
       invited.push(p);
+      // They signed up since the invite: the pending row becomes this participant.
+      const stale = pendingByEmail.get(d.email);
+      if (stale) await this.pendingRepo.delete({ id: stale.id });
     }
     log.participants = [lead, ...kept];
-    return invited;
+    return { invited, signupInvites };
+  }
+
+  /** New "sign up" invites this student already triggered in the last day (all their logs). */
+  private async signupInvitesToday(leadUserId: string): Promise<number> {
+    return this.pendingRepo
+      .createQueryBuilder('i')
+      .innerJoin(QuickWorkLog, 'l', 'l.id = i.logId')
+      .where('l.leadUserId = :leadUserId', { leadUserId })
+      .andWhere('i.createdAt >= :since', {
+        since: new Date(Date.now() - DAY_MS),
+      })
+      .getCount();
   }
 
   /** Evidence must be files this lead uploaded through our presign (their own S3 folder). */
@@ -1861,6 +2001,142 @@ export class QuickWorkService {
     await Promise.all(
       Array.from({ length: Math.min(MAIL_CONCURRENCY, queue.length) }, worker),
     );
+  }
+
+  /** A log cannot be submitted while a named teammate has not even created an account to answer. */
+  private async pendingSignupErrors(log: QuickWorkLog): Promise<string[]> {
+    const pending = await this.pendingRepo.find({ where: { logId: log.id } });
+    return pending.map(
+      (p) =>
+        `${p.name || p.email} has not signed up on CIEL yet, so they cannot confirm joining. Wait for them to sign up and approve, or remove them from the team.`,
+    );
+  }
+
+  /** "Create your account" email for each teammate who has no CIEL student account yet. */
+  private async emailSignupInvites(
+    log: QuickWorkLog,
+    leadName: string,
+    pending: QuickWorkPendingInvite[],
+  ) {
+    const queue = [...pending];
+    const worker = async () => {
+      for (let p = queue.shift(); p; p = queue.shift()) {
+        try {
+          await this.mailService?.sendQuickWorkSignupInvite({
+            respondToken: this.emailToken({ l: log.id, e: p.email }),
+            to: p.email,
+            name: p.name,
+            leadName,
+            title: log.title,
+            activityDate: log.activityDate,
+          });
+        } catch (e) {
+          this.logger.warn(
+            `Quick-work signup invite email failed: ${(e as Error).message}`,
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(MAIL_CONCURRENCY, queue.length) }, worker),
+    );
+  }
+
+  /**
+   * A student who just signed up (or signed in) takes over the invites addressed to their email:
+   * each pending invite becomes a normal "invited" participant they can approve or reject. Only an
+   * active student account qualifies, and only while the log can still change.
+   */
+  private async claimPendingInvites(
+    user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status'> & {
+      registrationNumber?: string | null;
+    },
+    onlyLogId?: string,
+  ): Promise<QuickWorkParticipant[]> {
+    if (
+      user.role !== UserRole.STUDENT ||
+      !ACTIVE_STUDENT_STATUSES.includes(user.status)
+    ) {
+      return [];
+    }
+    const email = normalizeEmail(user.email);
+    const pendings = await this.pendingRepo.find({
+      where: { email, ...(onlyLogId ? { logId: onlyLogId } : {}) },
+      relations: ['log'],
+    });
+    const claimed: QuickWorkParticipant[] = [];
+    for (const pending of pendings) {
+      const log = pending.log;
+      const already = await this.participantRepo.findOne({
+        where: { logId: pending.logId, userId: user.id },
+      });
+      if (log && !already && QUICK_WORK_EDITABLE.includes(log.status)) {
+        const p = await this.participantRepo.save(
+          this.participantRepo.create({
+            logId: log.id,
+            userId: user.id,
+            isLead: false,
+            name: (user.name || pending.name || '').slice(0, 100),
+            email,
+            studentId: (
+              pending.studentId ||
+              user.registrationNumber ||
+              ''
+            ).slice(0, 60),
+            contact: pending.contact ?? null,
+            joinStatus: 'invited',
+            present: true,
+          }),
+        );
+        claimed.push(p);
+        void this.notify(
+          log.leadUserId,
+          'Quick Community Impact: teammate signed up',
+          `${p.name || p.email} created a CIEL account and can now confirm "${log.title || 'your quick community activity'}".`,
+        );
+        void this.notify(
+          user.id,
+          'Quick Community Impact: confirm you took part',
+          `You were added to "${log.title || 'a quick community activity'}". Open Quick Impact Log to confirm or decline.`,
+        );
+      }
+      await this.pendingRepo.delete({ id: pending.id });
+    }
+    return claimed;
+  }
+
+  /** Teammates who still need to sign up; only the lead of an editable log sees them. */
+  private async attachPendingInvites<
+    V extends { id: string; isLead: boolean; status: QuickWorkStatus },
+  >(views: V[]): Promise<(V & { pendingInvites: PendingInviteView[] })[]> {
+    const ids = views
+      .filter((v) => v.isLead && QUICK_WORK_EDITABLE.includes(v.status))
+      .map((v) => v.id);
+    const rows = ids.length
+      ? await this.pendingRepo.find({
+          where: { logId: In(ids) },
+          order: { createdAt: 'ASC' },
+        })
+      : [];
+    return views.map((v) => ({
+      ...v,
+      pendingInvites: rows
+        .filter((r) => r.logId === v.id)
+        .map((r) => ({
+          id: r.id,
+          email: r.email,
+          name: r.name,
+          studentId: r.studentId,
+          contact: r.contact,
+        })),
+    }));
+  }
+
+  /** The viewer's own log view, with any not-yet-registered teammates added for the lead. */
+  private async leadView(log: QuickWorkLog, viewerId: string) {
+    const view = await this.signEvidence(this.toView(log, viewerId));
+    const [withPending] = await this.attachPendingInvites([view]);
+    return withPending;
   }
 
   private async sendInvite(

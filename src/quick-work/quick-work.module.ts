@@ -9,6 +9,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { QuickWorkLog } from './entities/quick-work-log.entity';
 import { QuickWorkParticipant } from './entities/quick-work-participant.entity';
+import { QuickWorkPendingInvite } from './entities/quick-work-pending-invite.entity';
 import { QuickWorkService } from './quick-work.service';
 import { QuickImpactPartnerService } from './quick-impact-partner.service';
 import {
@@ -26,6 +27,7 @@ import {
     TypeOrmModule.forFeature([
       QuickWorkLog,
       QuickWorkParticipant,
+      QuickWorkPendingInvite,
       User,
       FacultyUniversityConfirmation,
       AttendanceLog,

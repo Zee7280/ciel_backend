@@ -2580,6 +2580,65 @@ export class MailService {
   }
 
   /**
+   * Quick Community Impact: the lead named a teammate who has no CIEL student account yet. Invites
+   * them to sign up with this same email, after which the activity waits for their approval.
+   */
+  async sendQuickWorkSignupInvite(input: {
+    /** Sealed token for the approve / reject page (works once they have an account). */
+    respondToken: string;
+    to: string;
+    name: string;
+    leadName: string;
+    title: string;
+    activityDate: string | null;
+  }): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const next = '/dashboard/student/paths/community-service/quick-work';
+    const signupLink = this.buildFrontendLink('/signup', {
+      role: 'student',
+      email: input.to,
+      next,
+    });
+    const loginLink = this.buildFrontendLink('/login', { next });
+    const buttons = this.quickWorkAnswerButtons(
+      input.respondToken,
+      'Approve',
+      'Reject',
+    );
+    const title = input.title?.trim() || 'an activity';
+    const titleEsc = this.escHtmlPlain(title);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${this.escHtmlPlain(input.name?.trim() || 'Student')},</p>
+        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact on CIEL PK. You don’t have a CIEL student account yet, so please sign up first. The activity can only be submitted, and your hours counted, once you approve it.</p>
+        <p style="margin: 22px 0;">
+          <a href="${signupLink}" style="background-color: #0e7d74; color: #ffffff; padding: 11px 22px; text-decoration: none; border-radius: 6px; font-weight: bold;">Create your student account</a>
+        </p>
+        <p style="font-size: 13px; color: #555;">Sign up as a <strong>student</strong> with this same email address (${this.escHtmlPlain(input.to)}). Already have an account? <a href="${loginLink}">Sign in</a>.</p>
+        <p>After signing up, approve or reject here, or from your Quick Impact Log:</p>
+        ${buttons}
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Sign up to confirm you took part in ${title} (Quick Community Impact)`,
+        html,
+      });
+      this.logger.log(`Quick-work signup invite email sent to ${input.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send quick-work signup invite email to ${input.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
+  /**
    * Asks the named faculty supervisor to confirm a student (or team) before their impact report can
    * start. Returns whether delivery succeeded so a student-triggered reminder can say so.
    */

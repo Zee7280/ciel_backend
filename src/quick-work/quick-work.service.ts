@@ -43,14 +43,20 @@ import {
   EMAIL_RE,
   normalizeEmail,
   QUICK_WORK_CLAIMING,
+  QUICK_WORK_CONFIRMABLE,
   QUICK_WORK_EDITABLE,
   QUICK_WORK_EVIDENCE_TYPES,
   QUICK_WORK_MAX_DAILY_MINUTES,
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
   cleanPartners,
+  isClockTime,
   isCreditedParticipant,
+  isIsoDate,
+  hasPhoneCharsOnly,
+  isValidMapPin,
   normalizeCertificateCode,
+  normalizeSdgs,
   partnerLabel,
   partnerList,
   pktNow,
@@ -294,6 +300,7 @@ export class QuickWorkService {
     const lead = log.participants.find((p) => p.isLead) as QuickWorkParticipant;
 
     const text = (v: string | null | undefined) => (v ?? '').trim();
+    this.checkFormats(dto, text);
     if (dto.mode !== undefined) log.mode = dto.mode;
     if (dto.university !== undefined) log.university = text(dto.university);
     if (dto.department !== undefined) log.department = text(dto.department);
@@ -348,7 +355,19 @@ export class QuickWorkService {
         (p) => known.get(p.name.toLowerCase()) ?? p,
       );
     }
-    if (dto.sdg !== undefined) log.sdg = dto.sdg ?? null;
+    if (dto.sdg !== undefined || dto.secondarySdgs !== undefined) {
+      const main = dto.sdg !== undefined ? dto.sdg : log.sdg;
+      // An older client that only knows the main goal and clears it means "no SDG at all".
+      const others =
+        dto.secondarySdgs !== undefined
+          ? dto.secondarySdgs
+          : dto.sdg === null
+            ? []
+            : (log.secondarySdgs ?? []);
+      const goals = normalizeSdgs(main, others);
+      log.sdg = goals.sdg;
+      log.secondarySdgs = goals.secondarySdgs;
+    }
     if (dto.summary !== undefined) log.summary = dto.summary ?? '';
     if (dto.peopleReached !== undefined) {
       log.peopleReached = dto.peopleReached ?? null;
@@ -401,6 +420,46 @@ export class QuickWorkService {
     return this.leadView(await this.loadLog(log.id), viewer.id);
   }
 
+  /**
+   * Format checks for values the form's own controls (date picker, time inputs, map, phone fields)
+   * already keep valid, so a hand-made request cannot store junk. Runs before anything is changed.
+   */
+  private checkFormats(
+    dto: SaveQuickWorkLogDto,
+    text: (v: string | null | undefined) => string,
+  ) {
+    if (text(dto.activityDate) && !isIsoDate(text(dto.activityDate))) {
+      throw new BadRequestException('Enter the activity date as YYYY-MM-DD.');
+    }
+    for (const t of [dto.startTime, dto.endTime]) {
+      if (text(t) && !isClockTime(text(t))) {
+        throw new BadRequestException('Enter the times as HH:MM (24-hour).');
+      }
+    }
+    if (text(dto.locationPin) && !isValidMapPin(text(dto.locationPin))) {
+      throw new BadRequestException(
+        'The map pin must be a latitude and longitude, like 31.5204, 74.3587, or left empty.',
+      );
+    }
+    const contacts: [string, string | null | undefined][] = [
+      ['the host organisation', dto.hostContact],
+      ...(dto.partnerDetails ?? []).map(
+        (p): [string, string | null | undefined] => [p.name, p.contact],
+      ),
+      ...(dto.teammates ?? []).map((t): [string, string | null | undefined] => [
+        t.name || t.email,
+        t.contact,
+      ]),
+    ];
+    for (const [who, contact] of contacts) {
+      if (text(contact) && !hasPhoneCharsOnly(text(contact))) {
+        throw new BadRequestException(
+          `Contact numbers can only have digits, +, spaces, brackets and hyphens (${who}).`,
+        );
+      }
+    }
+  }
+
   async deleteDraft(viewer: Viewer, id: string) {
     const log = await this.loadLog(id);
     if (log.leadUserId !== viewer.id) {
@@ -421,11 +480,11 @@ export class QuickWorkService {
     if (me.isLead) {
       throw new BadRequestException('You lead this activity.');
     }
-    if (!QUICK_WORK_EDITABLE.includes(log.status)) {
+    if (!QUICK_WORK_CONFIRMABLE.includes(log.status)) {
       throw new BadRequestException(
         log.status === 'rejected'
           ? 'This log was not approved and is closed; your participation can no longer change.'
-          : 'This log has already been submitted; your participation can no longer change.',
+          : 'This log has already been approved; your participation can no longer change.',
       );
     }
     me.joinStatus = accept ? 'joined' : 'declined';
@@ -469,7 +528,7 @@ export class QuickWorkService {
       name: participant?.name ?? (needsSignup ? resolved.pending.name : ''),
       participants: log.participants.length,
       answer,
-      open: QUICK_WORK_EDITABLE.includes(log.status),
+      open: QUICK_WORK_CONFIRMABLE.includes(log.status),
       // The teammate has no CIEL student account yet: the page sends them to sign up first.
       needsSignup,
       signupEmail: needsSignup ? resolved.pending.email : null,
@@ -594,6 +653,7 @@ export class QuickWorkService {
       participation: credited > 1 ? ('team' as const) : ('individual' as const),
       teamSize: credited,
       sdg: log.sdg,
+      secondarySdgs: log.secondarySdgs ?? [],
       verifiedAt: log.reviewedAt,
     };
   }
@@ -754,9 +814,11 @@ export class QuickWorkService {
         ...log,
         evidence: log.evidence ?? [],
         participants: log.participants,
+        pendingTeammates: await this.pendingRepo.count({
+          where: { logId: log.id },
+        }),
       }),
       ...(await this.claimErrors(log)),
-      ...(await this.pendingSignupErrors(log)),
     ];
     if (errors.length) throw new BadRequestException(errors);
 
@@ -880,6 +942,17 @@ export class QuickWorkService {
           : 'rejected';
     // History keeps "approved" for a faculty approval (as before); CIEL PK's is "admin_approved".
     const decision = dto.action === 'approve' ? 'approved' : status;
+    // At CIEL PK's final approval, a teammate who never confirmed is not credited (the lead can submit
+    // without waiting for them, but hours go only to students who said they took part).
+    const notCredited =
+      status === 'approved'
+        ? log.participants.filter(
+            (p) =>
+              !p.isLead &&
+              p.joinStatus !== 'joined' &&
+              (p.present || (p.minutes || 0) > 0),
+          )
+        : [];
     const result = await this.logRepo.update(
       { id: log.id, status: log.status },
       {
@@ -894,11 +967,28 @@ export class QuickWorkService {
             reviewerId,
             note || undefined,
           ),
+          ...(notCredited.length
+            ? [
+                this.historyEntry(
+                  'not_credited',
+                  reviewerId,
+                  `Not credited (did not confirm taking part): ${notCredited
+                    .map((p) => p.name || p.email)
+                    .join(', ')}`.slice(0, 500),
+                ),
+              ]
+            : []),
         ],
       },
     );
     if (!result.affected) {
       throw new ConflictException('This log was already reviewed.');
+    }
+    if (notCredited.length) {
+      await this.participantRepo.update(
+        { id: In(notCredited.map((p) => p.id)) },
+        { present: false, minutes: 0 },
+      );
     }
 
     const outcome =
@@ -909,11 +999,14 @@ export class QuickWorkService {
           : status === 'changes'
             ? `was returned for changes: ${note}`
             : `was not approved: ${note}`;
+    const notCreditedIds = new Set(notCredited.map((p) => p.id));
     for (const p of log.participants) {
       void this.notify(
         p.userId,
         'Quick Community Impact reviewed',
-        `"${log.title}" ${outcome}`,
+        notCreditedIds.has(p.id)
+          ? `"${log.title}" was approved, but you had not confirmed that you took part, so no hours were credited to you.`
+          : `"${log.title}" ${outcome}`,
       );
     }
     if (status === 'admin_review') {
@@ -1421,8 +1514,13 @@ export class QuickWorkService {
   private async claimErrors(log: QuickWorkLog): Promise<string[]> {
     const errors: string[] = [];
     if (!log.activityDate) return errors;
+    // Only the lead and teammates who confirmed: one who has not answered is not credited, so their
+    // other logs are no reason to hold this one back.
     const credited = log.participants.filter(
-      (p) => p.present && attendanceMinutes(p) > 0,
+      (p) =>
+        p.present &&
+        attendanceMinutes(p) > 0 &&
+        (p.isLead || p.joinStatus === 'joined'),
     );
     if (!credited.length) return errors;
     // Two queries for the whole team (a log may have hundreds of members), grouped per student.
@@ -1564,6 +1662,25 @@ export class QuickWorkService {
     }
 
     const current = log.participants.filter((p) => !p.isLead);
+    // An invitation email names the activity, so a NEW teammate (not already on the log or waiting to
+    // sign up) needs the title first. Checked before anything is written; teammates already invited
+    // are left alone, so an older draft with no title still saves.
+    if (!(log.title ?? '').trim()) {
+      const known = new Set(current.map((p) => normalizeEmail(p.email)));
+      const fresh = desired.filter((d) => !known.has(d.email));
+      if (fresh.length) {
+        const waiting = new Set(
+          (await this.pendingRepo.find({ where: { logId: log.id } })).map(
+            (p) => p.email,
+          ),
+        );
+        if (fresh.some((d) => !waiting.has(d.email))) {
+          throw new BadRequestException(
+            'Add the activity title first, so your teammates’ invitations name the activity.',
+          );
+        }
+      }
+    }
     const removed = current.filter((p) => !seen.has(normalizeEmail(p.email)));
     if (removed.length) {
       await this.participantRepo.delete({ id: In(removed.map((p) => p.id)) });
@@ -1882,6 +1999,7 @@ export class QuickWorkService {
       partners: partnerList(log.partners).map((p) => p.name),
       partnerDetails: partnerList(log.partners),
       sdg: log.sdg,
+      secondarySdgs: log.secondarySdgs ?? [],
       summary: log.summary,
       peopleReached: log.peopleReached,
       peopleTarget: log.peopleTarget,
@@ -2000,15 +2118,6 @@ export class QuickWorkService {
     };
     await Promise.all(
       Array.from({ length: Math.min(MAIL_CONCURRENCY, queue.length) }, worker),
-    );
-  }
-
-  /** A log cannot be submitted while a named teammate has not even created an account to answer. */
-  private async pendingSignupErrors(log: QuickWorkLog): Promise<string[]> {
-    const pending = await this.pendingRepo.find({ where: { logId: log.id } });
-    return pending.map(
-      (p) =>
-        `${p.name || p.email} has not signed up on CIEL yet, so they cannot confirm joining. Wait for them to sign up and approve, or remove them from the team.`,
     );
   }
 
@@ -2201,6 +2310,7 @@ export class QuickWorkService {
           university: log.university,
           department: log.department,
           sdg: log.sdg,
+          secondarySdgs: log.secondarySdgs ?? [],
           peopleReached: log.peopleReached,
           teamMinutes: log.participants.reduce(
             (a, p) => a + (p.present ? p.minutes || 0 : 0),

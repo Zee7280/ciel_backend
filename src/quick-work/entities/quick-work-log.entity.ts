@@ -119,6 +119,10 @@ export class QuickWorkLog {
   @Column({ type: 'smallint', nullable: true })
   sdg: number | null;
 
+  /** Other goals this activity supports (the main one is `sdg`); goal numbers 1-17, at most four. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  secondarySdgs: number[];
+
   /** Length 1000: widened in place by src/database/widen-columns-before-sync.ts, never by synchronize. */
   @Column({ type: 'varchar', length: 1000, default: '' })
   summary: string;

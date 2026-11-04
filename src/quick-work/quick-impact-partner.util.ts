@@ -1,4 +1,4 @@
-import { partnerList } from './quick-work.util';
+import { normalizeSdgs, partnerList } from './quick-work.util';
 
 /**
  * Pure helpers for telling the host / partner organisations of an APPROVED Quick Community Impact
@@ -57,6 +57,7 @@ export type PartnerImpactLog = {
   location: string;
   summary: string;
   sdg: number | null;
+  secondarySdgs?: number[] | null;
   peopleReached: number | null;
   peopleTarget?: number | null;
   host: string | null;
@@ -143,10 +144,16 @@ export function partnerImpactFacts(log: PartnerImpactLog) {
     (p) => p.present && (p.minutes || 0) > 0,
   );
   const minutes = credited.reduce((a, p) => a + (p.minutes || 0), 0);
-  const sdg =
-    Number.isInteger(log.sdg) && Number(log.sdg) >= 1 && Number(log.sdg) <= 17
-      ? Number(log.sdg)
-      : null;
+  const goals = normalizeSdgs(log.sdg, log.secondarySdgs);
+  const sdgs = [goals.sdg, ...goals.secondarySdgs]
+    .filter((n): n is number => n !== null)
+    .map((n, i) => ({
+      n,
+      name: SDG_NAMES[n - 1],
+      color: SDG_COLORS[n - 1],
+      main: i === 0,
+    }));
+  const sdg = goals.sdg;
   const other = (log.activityTypeOther ?? '').trim();
   return {
     id: log.id,
@@ -164,9 +171,11 @@ export function partnerImpactFacts(log: PartnerImpactLog) {
     peopleReached: log.peopleReached ?? null,
     peopleTarget: log.peopleTarget ?? null,
     evidenceCount: Array.isArray(log.evidence) ? log.evidence.length : 0,
+    // The main goal (older readers) and the full list, main first.
     sdg,
     sdgName: sdg ? SDG_NAMES[sdg - 1] : null,
     sdgColor: sdg ? SDG_COLORS[sdg - 1] : null,
+    sdgs,
     host: (log.host ?? '').trim() || null,
     partners: partnerList(log.partners).map((p) => p.name),
   };

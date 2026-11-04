@@ -95,6 +95,28 @@ describe('Quick Impact → partner facts', () => {
     expect(text).not.toContain('@');
   });
 
+  it('lists every goal, the main one first, with the main goal fields kept for older readers', () => {
+    const facts = partnerImpactFacts(
+      log({ sdg: 3, secondarySdgs: [13, 3, 7] }),
+    );
+    expect(facts.sdgs.map((g) => [g.n, g.main])).toEqual([
+      [3, true],
+      [13, false],
+      [7, false],
+    ]);
+    expect(facts.sdgs[1]).toMatchObject({
+      name: 'Climate Action',
+      color: '#3f7e44',
+    });
+    expect(facts.sdg).toBe(3);
+    expect(facts.sdgName).toBe('Good Health and Well-being');
+    // No main but others: the first other is promoted; none at all: empty.
+    expect(
+      partnerImpactFacts(log({ sdg: null, secondarySdgs: [13] })).sdg,
+    ).toBe(13);
+    expect(partnerImpactFacts(log({ sdg: null })).sdgs).toEqual([]);
+  });
+
   it('describes an "Other" activity with the student’s own words and tolerates a missing SDG', () => {
     const facts = partnerImpactFacts(
       log({

@@ -121,6 +121,26 @@ export function quickImpactFlashcardPdf(
       { width: W - 70 },
     );
   y += 70;
+  // Other goals this activity supports: small chips, two per row.
+  const others = facts.sdgs.filter((g) => !g.main);
+  if (others.length) {
+    const cw = (W - 8) / 2;
+    others.forEach((g, i) => {
+      const x = M + (i % 2) * (cw + 8);
+      const cy = y - 12 + Math.floor(i / 2) * 26;
+      doc.roundedRect(x, cy, cw, 22, 6).fill(g.color);
+      doc
+        .fillColor('#ffffff')
+        .font('Helvetica-Bold')
+        .fontSize(8.5)
+        .text(`SDG ${g.n} · ${g.name}`, x + 8, cy + 7, {
+          width: cw - 16,
+          height: 10,
+          ellipsis: true,
+        });
+    });
+    y += Math.ceil(others.length / 2) * 26 + 2;
+  }
 
   // Reach against target
   if (facts.peopleTarget && facts.peopleTarget > 0) {

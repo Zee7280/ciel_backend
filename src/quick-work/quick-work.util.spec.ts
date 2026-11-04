@@ -1,6 +1,11 @@
 import {
   attendanceMinutes,
   cleanPartners,
+  hasPhoneCharsOnly,
+  isClockTime,
+  isPlausiblePhone,
+  isValidMapPin,
+  normalizeSdgs,
   isCreditedParticipant,
   normalizeCertificateCode,
   partnerLabel,
@@ -164,7 +169,7 @@ describe('quick-work rules', () => {
     expect(long).toContain('Ayesha exceeds the 9-hour daily service limit.');
   });
 
-  it('team logs need confirmed teammates with their own student IDs', () => {
+  it('team logs need teammates with their own student IDs; an unanswered invite does not hold the log back, a declined one does', () => {
     const mate = {
       ...lead,
       name: 'Ali',
@@ -178,10 +183,43 @@ describe('quick-work rules', () => {
       NOW,
     );
     expect(errs).toContain('Each participant must have a unique student ID.');
-    expect(errs).toContain('Ali has not confirmed joining yet.');
+    // Invited but not answered yet: not a reason to hold the log back.
+    expect(errs.join(' | ')).not.toMatch(/confirmed joining/);
+    expect(
+      quickWorkSubmitErrors(
+        complete({
+          mode: 'team',
+          participants: [lead, { ...mate, studentId: 'S2' }],
+        }),
+        NOW,
+      ),
+    ).toEqual([]);
+    // Declined: the lead must remove them first.
+    expect(
+      quickWorkSubmitErrors(
+        complete({
+          mode: 'team',
+          participants: [
+            lead,
+            { ...mate, studentId: 'S2', joinStatus: 'declined' },
+          ],
+        }),
+        NOW,
+      ),
+    ).toContain('Ali declined to join. Remove them before submitting.');
     expect(quickWorkSubmitErrors(complete({ mode: 'team' }), NOW)).toContain(
       'Add a teammate or select “Just me”.',
     );
+  });
+
+  it('a team of the lead plus a teammate still to sign up counts as a team', () => {
+    const team = complete({ mode: 'team' });
+    expect(quickWorkSubmitErrors(team, NOW)).toContain(
+      'Add a teammate or select “Just me”.',
+    );
+    expect(
+      quickWorkSubmitErrors({ ...team, pendingTeammates: 1 }, NOW),
+    ).toEqual([]);
   });
 
   it('evidence, captions and both declarations are required', () => {
@@ -264,5 +302,101 @@ describe('quick-work certificate IDs', () => {
     expect(
       isCreditedParticipant({ present: true, ...slot, breakMinutes: 60 }),
     ).toBe(false);
+  });
+});
+
+describe('quick-work SDGs and field formats', () => {
+  it('main goal first, then the others: valid goals only, no repeats, at most five', () => {
+    expect(normalizeSdgs(3, [13, 3, 13, 7])).toEqual({
+      sdg: 3,
+      secondarySdgs: [13, 7],
+    });
+    expect(normalizeSdgs(null, [])).toEqual({ sdg: null, secondarySdgs: [] });
+    expect(normalizeSdgs(undefined, undefined)).toEqual({
+      sdg: null,
+      secondarySdgs: [],
+    });
+    // 0, 18, decimals, text and blanks are dropped.
+    expect(normalizeSdgs(0, [18, 2.5, 'x', '', null, 4])).toEqual({
+      sdg: 4,
+      secondarySdgs: [],
+    });
+    expect(normalizeSdgs(1, [2, 3, 4, 5, 6, 7])).toEqual({
+      sdg: 1,
+      secondarySdgs: [2, 3, 4, 5],
+    });
+  });
+
+  it('with no main goal the first other goal becomes the main one', () => {
+    expect(normalizeSdgs(null, [13, 7])).toEqual({
+      sdg: 13,
+      secondarySdgs: [7],
+    });
+    expect(normalizeSdgs('', ['15'])).toEqual({ sdg: 15, secondarySdgs: [] });
+  });
+
+  it('times are HH:MM, 24-hour', () => {
+    for (const ok of ['00:00', '09:05', '23:59'])
+      expect(isClockTime(ok)).toBe(true);
+    for (const bad of ['24:00', '9:05', '10:60', '10:30:00', '', 'ab:cd', null])
+      expect(isClockTime(bad)).toBe(false);
+  });
+
+  it('a map pin is latitude,longitude within range', () => {
+    expect(isValidMapPin('31.5204,74.3587')).toBe(true);
+    expect(isValidMapPin('31.36497, 74.21606129999999')).toBe(true);
+    expect(isValidMapPin('-33.86,151.2')).toBe(true);
+    for (const bad of [
+      '',
+      'abc',
+      '91,10',
+      '10,181',
+      '31.5204',
+      '31.5,74.3,5',
+      null,
+    ])
+      expect(isValidMapPin(bad)).toBe(false);
+  });
+
+  it('a number still being typed passes the draft check; only a complete one passes submit', () => {
+    for (const partial of ['+9230', '03', '+92 300', '']) {
+      expect(hasPhoneCharsOnly(partial)).toBe(true);
+    }
+    for (const bad of ['call me', '+92-abc', '+92#300', '12a']) {
+      expect(hasPhoneCharsOnly(bad)).toBe(false);
+    }
+    expect(isPlausiblePhone('+9230')).toBe(false);
+    expect(isPlausiblePhone('+923001234567')).toBe(true);
+  });
+
+  it('submit asks for a complete contact number when one was started', () => {
+    const base = complete();
+    expect(quickWorkSubmitErrors(base, NOW)).toEqual([]);
+    expect(
+      quickWorkSubmitErrors({ ...base, hostContact: '+923001234567' }, NOW),
+    ).toEqual([]);
+    expect(
+      quickWorkSubmitErrors({ ...base, hostContact: '+9230' }, NOW),
+    ).toEqual([
+      'Enter a complete contact number for the host organisation, or clear it.',
+    ]);
+    expect(
+      quickWorkSubmitErrors(
+        { ...base, partners: [{ name: 'Edhi', email: null, contact: '12' }] },
+        NOW,
+      ),
+    ).toEqual(['Enter a complete contact number for Edhi, or clear it.']);
+  });
+
+  it('a contact number is digits with + ( ) - space, 6 to 17 digits', () => {
+    for (const ok of [
+      '+923001234567',
+      '+92 300 1234567',
+      '03001234567',
+      '+1 (415) 555-0100',
+    ])
+      expect(isPlausiblePhone(ok)).toBe(true);
+    for (const bad of ['', '12345', 'call me', '+92-abc', '1'.repeat(18), null])
+      expect(isPlausiblePhone(bad)).toBe(false);
   });
 });

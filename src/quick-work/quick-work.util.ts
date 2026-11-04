@@ -25,6 +25,17 @@ export const QUICK_WORK_EDITABLE: readonly QuickWorkStatus[] = [
 ];
 
 /** States whose attendance blocks the same student claiming an overlapping period elsewhere. */
+/**
+ * Statuses in which a teammate may still confirm (or decline) taking part: while the lead edits, and
+ * after submit until CIEL PK's final decision. Only teammates who confirmed are credited hours.
+ */
+export const QUICK_WORK_CONFIRMABLE: readonly QuickWorkStatus[] = [
+  'draft',
+  'changes',
+  'submitted',
+  'admin_review',
+];
+
 export const QUICK_WORK_CLAIMING: readonly QuickWorkStatus[] = [
   'submitted',
   'admin_review',
@@ -251,6 +262,57 @@ export function isIsoDate(value: string | null | undefined): boolean {
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Goals one activity may be linked to: a main SDG plus up to four more. */
+export const QUICK_WORK_MAX_SDGS = 5;
+
+/**
+ * The main SDG first, then the others: only goals 1-17, no repeats, at most five. With no main goal the
+ * first of the others becomes the main one, so the two columns never disagree.
+ */
+export function normalizeSdgs(
+  main: unknown,
+  others: unknown,
+): { sdg: number | null; secondarySdgs: number[] } {
+  const list: number[] = [];
+  const rest: unknown[] = Array.isArray(others) ? (others as unknown[]) : [];
+  for (const v of [main, ...rest]) {
+    const n = typeof v === 'string' && v.trim() === '' ? NaN : Number(v);
+    if (v == null || !Number.isInteger(n) || n < 1 || n > 17) continue;
+    if (!list.includes(n)) list.push(n);
+  }
+  const kept = list.slice(0, QUICK_WORK_MAX_SDGS);
+  return { sdg: kept[0] ?? null, secondarySdgs: kept.slice(1) };
+}
+
+/** `HH:MM`, 24-hour. */
+export function isClockTime(value: string | null | undefined): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value ?? ''));
+}
+
+/** A map pin as `lat,lng` (e.g. 31.5204,74.3587) within the valid ranges. */
+export function isValidMapPin(value: string | null | undefined): boolean {
+  const m = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(
+    String(value ?? ''),
+  );
+  return !!m && Math.abs(Number(m[1])) <= 90 && Math.abs(Number(m[2])) <= 180;
+}
+
+/**
+ * Only the characters a phone number has (digits, + ( ) - . and space). A draft accepts a number the student
+ * is still typing, so this is all it checks; `isPlausiblePhone` is the complete check, made on submit.
+ */
+export function hasPhoneCharsOnly(value: string | null | undefined): boolean {
+  return /^\+?[\d\s().-]*$/.test(String(value ?? '').trim());
+}
+
+/** A complete contact number as the form stores it (+<country code><digits>): 6 to 17 digits. */
+export function isPlausiblePhone(value: string | null | undefined): boolean {
+  const v = String(value ?? '').trim();
+  if (!/^\+?[\d\s().-]+$/.test(v)) return false;
+  const digits = v.replace(/\D/g, '').length;
+  return digits >= 6 && digits <= 17;
+}
+
 export function normalizeEmail(value: string | null | undefined): string {
   return String(value ?? '')
     .trim()
@@ -262,6 +324,7 @@ export type QuickWorkSubmitParticipant = QuickWorkAttendance & {
   name: string;
   email: string;
   studentId: string;
+  contact?: string | null;
   isLead: boolean;
   joinStatus: string;
 };
@@ -282,6 +345,11 @@ export type QuickWorkSubmitInput = {
   location: string;
   peopleReached: number | null;
   peopleTarget?: number | null;
+  /** Optional contacts; a number that was started must be complete. */
+  hostContact?: string | null;
+  partners?: unknown;
+  /** Teammates named by email who have no CIEL account yet: they count as a team, but are not on the log. */
+  pendingTeammates?: number;
   summary: string;
   visibility: string;
   consent: boolean;
@@ -322,7 +390,7 @@ export function quickWorkSubmitErrors(
   if (people.length > QUICK_WORK_MAX_PARTICIPANTS) {
     e.push(`Maximum ${QUICK_WORK_MAX_PARTICIPANTS} participants per log.`);
   }
-  if (log.mode === 'team' && people.length < 2) {
+  if (log.mode === 'team' && people.length + (log.pendingTeammates ?? 0) < 2) {
     e.push('Add a teammate or select “Just me”.');
   }
   for (const p of people) {
@@ -338,12 +406,12 @@ export function quickWorkSubmitErrors(
   }
   for (const p of people) {
     if (p.isLead) continue;
+    // A teammate who has not answered yet does not hold the log back: they can confirm until CIEL PK's
+    // final decision, and only teammates who confirmed are credited. One who declined must be removed.
     if (p.joinStatus === 'declined') {
       e.push(
         `${p.name || p.email} declined to join. Remove them before submitting.`,
       );
-    } else if (p.joinStatus !== 'joined') {
-      e.push(`${p.name || p.email} has not confirmed joining yet.`);
     }
   }
 
@@ -376,6 +444,23 @@ export function quickWorkSubmitErrors(
     eventEnd > eventStart;
   if (!windowOk) {
     e.push('Choose an end time after the start time on the same day.');
+  }
+
+  // Optional contact numbers: one that was started must be complete.
+  const contacts: [string, string | null | undefined][] = [
+    ['the host organisation', log.hostContact],
+    ...partnerList(log.partners).map(
+      (p): [string, string | null | undefined] => [p.name, p.contact],
+    ),
+    ...people.map((p): [string, string | null | undefined] => [
+      p.name || p.email,
+      p.contact,
+    ]),
+  ];
+  for (const [who, contact] of contacts) {
+    if ((contact ?? '').trim() && !isPlausiblePhone(contact)) {
+      e.push(`Enter a complete contact number for ${who}, or clear it.`);
+    }
   }
 
   // Step 3 — attendance

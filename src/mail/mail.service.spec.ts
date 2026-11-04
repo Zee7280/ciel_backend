@@ -2,6 +2,10 @@ import { ConfigService } from '@nestjs/config';
 import type { SendMailOptions } from 'nodemailer';
 import { MailService } from './mail.service';
 
+/** The HTML body of a captured message as text (nodemailer types it as string | Buffer | stream). */
+const htmlOf = (m: SendMailOptions): string =>
+  typeof m.html === 'string' ? m.html : '';
+
 /** Private members the reliability tests reach into. */
 type MailServiceInternals = {
   transporter: { sendMail: jest.Mock; verify: jest.Mock };
@@ -217,10 +221,10 @@ describe('MailService — SMTP reliability', () => {
     expect(await service.sendQuickImpactPartnerFlashcard(input)).toBe(true);
     const mail = sendMailReliable.mock.calls[0][0];
     expect(mail.to).toBe('health@bnu.edu.pk');
-    expect(String(mail.html)).toContain('Register as a partner');
-    expect(String(mail.html)).toContain('BNU &lt;Health&gt; Society');
-    expect(String(mail.html)).toContain('role=ngo');
-    expect(String(mail.html)).toContain('%2Fdashboard%2Fpartner%2Fimpact');
+    expect(htmlOf(mail)).toContain('Register as a partner');
+    expect(htmlOf(mail)).toContain('BNU &lt;Health&gt; Society');
+    expect(htmlOf(mail)).toContain('role=ngo');
+    expect(htmlOf(mail)).toContain('%2Fdashboard%2Fpartner%2Fimpact');
     expect(mail.attachments).toEqual([
       expect.objectContaining({
         filename: 'CIEL-PK-Quick-Impact-Flashcard.pdf',
@@ -233,10 +237,44 @@ describe('MailService — SMTP reliability', () => {
       existingAccount: true,
     });
     const second = sendMailReliable.mock.calls[1][0];
-    expect(String(second.html)).toContain('Open My Impact Wall');
-    expect(String(second.html)).not.toContain('Register as a partner');
+    expect(htmlOf(second)).toContain('Open My Impact Wall');
+    expect(htmlOf(second)).not.toContain('Register as a partner');
 
     sendMailReliable.mockRejectedValueOnce(new Error('smtp'));
     expect(await service.sendQuickImpactPartnerFlashcard(input)).toBe(false);
+  });
+  it('Quick Impact teammate invitations name the activity in the subject and the message, escaped', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    const base = {
+      respondToken: 'tok',
+      to: 'mate@bnu.edu.pk',
+      name: 'Mate',
+      leadName: 'Ayesha',
+      activityDate: '2026-11-03',
+    };
+    await service.sendQuickWorkTeamInvite({
+      ...base,
+      title: 'Pinktober <b>circle</b>',
+    });
+    await service.sendQuickWorkSignupInvite({
+      ...base,
+      title: 'Pinktober <b>circle</b>',
+    });
+    for (const [mail] of sendMailReliable.mock.calls) {
+      expect(String(mail.subject)).toContain('Pinktober <b>circle</b>');
+      expect(htmlOf(mail)).toContain(
+        '<strong>Pinktober &lt;b&gt;circle&lt;/b&gt;</strong>',
+      );
+      expect(htmlOf(mail)).toContain('Ayesha');
+    }
+    // No title yet: a plain fallback, never a blank or "undefined".
+    await service.sendQuickWorkTeamInvite({ ...base, title: '  ' });
+    const last = sendMailReliable.mock.calls[2][0];
+    expect(htmlOf(last)).toContain('<strong>an activity</strong>');
+    expect(String(last.subject)).not.toContain('undefined');
   });
 });

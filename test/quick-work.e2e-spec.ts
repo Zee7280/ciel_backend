@@ -342,11 +342,20 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       getRepositoryToken(Notification),
     );
     /** In-app notices are written after the response; wait until `count` exist. */
-    const noticesFor = async (userId: string, title: string, count = 1) => {
+    const noticesFor = async (
+      userId: string,
+      title: string,
+      count = 1,
+      /** Keep waiting until a notice with this text exists (earlier tests leave notices with the same title). */
+      mentioning?: string,
+    ) => {
       let rows: Notification[] = [];
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 150; i++) {
         rows = await notes.find({ where: { userId, title } });
-        if (rows.length >= count) break;
+        const ready = mentioning
+          ? rows.some((n) => n.message.includes(mentioning))
+          : rows.length >= count;
+        if (ready) break;
         await new Promise((r) => setTimeout(r, 20));
       }
       return rows;
@@ -370,6 +379,8 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     const forAdmin = await noticesFor(
       admin.id,
       'Quick Community Impact: final approval needed',
+      1,
+      'Notify drive',
     );
     expect(forAdmin.some((n) => n.message.includes('Notify drive'))).toBe(true);
 
@@ -738,7 +749,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     expect((await h.as(null).get('/quick-work/me')).status).toBe(401);
   });
 
-  it('team: teammates must be CIEL students who confirm before the lead can submit', async () => {
+  it('team: teammates must be CIEL students; they confirm without holding the lead back', async () => {
     const lead = await h.makeUser(UserRole.STUDENT);
     const mate = await h.makeUser(UserRole.STUDENT);
     const faculty = await authorisedFaculty();
@@ -754,7 +765,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       );
     expect(notStudent.status).toBe(400);
     expect(messages(notStudent.body as Body<unknown>)).toMatch(
-      /No CIEL student account/,
+      /not a student account/,
     );
 
     const log = await draft(
@@ -783,13 +794,11 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     const mateRow = log.participants.find((p) => p.email === mate.email);
     expect(mateRow).toMatchObject({ joinStatus: 'invited', minutes: 45 });
 
+    // The lead does not have to wait for the teammate: submit goes through.
     const early = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
-    expect(early.status).toBe(400);
-    expect(messages(early.body as Body<unknown>)).toMatch(
-      /not confirmed joining/,
-    );
+    expect(early.status).toBe(201);
 
-    // The teammate sees the invitation and confirms.
+    // The teammate sees the invitation and can still confirm after the submit.
     const mine = await h.as(mate).get('/quick-work/me');
     expect(
       (mine.body as Body<{ logs: LogView[] }>).data.logs.map((l) => l.id),
@@ -800,7 +809,6 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .send({ accept: true })
       .expect(201);
 
-    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
     await h
       .as(faculty)
       .post(`/faculty/quick-work/${log.id}/review`)
@@ -1407,18 +1415,9 @@ describe('Quick Community Work (real app + real Postgres)', () => {
           .send({ token: tampered(mateToken), accept: true })
       ).status,
     ).toBe(404);
-    const early = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
-    expect(messages(early.body as Body<unknown>)).toMatch(
-      /not confirmed joining/,
-    );
-    await h
-      .as(null)
-      .post('/quick-work/email-response')
-      .send({ token: mateToken, accept: true })
-      .expect(201);
-
-    // No faculty step before submit; the faculty review queue gets it once submitted.
+    // The lead does not wait for the teammate's answer.
     await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    // No faculty step before submit; the faculty review queue gets it once submitted.
     expect(h.mail.of('sendQuickWorkSubmittedForReview')).toHaveLength(1);
     const queue = await h.as(faculty).get('/faculty/quick-work');
     expect(
@@ -1427,7 +1426,29 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       ),
     ).toContain(log.id);
 
-    // Once submitted, the link no longer changes anything.
+    // The emailed link still works after the submit, until CIEL PK's final decision.
+    expect(
+      (
+        await h
+          .as(null)
+          .get(
+            `/quick-work/email-response?token=${encodeURIComponent(mateToken)}`,
+          )
+      ).body,
+    ).toMatchObject({ data: { answer: 'pending', open: true } });
+    await h
+      .as(null)
+      .post('/quick-work/email-response')
+      .send({ token: mateToken, accept: true })
+      .expect(201);
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    await finalApprove(log.id);
+
+    // Once CIEL PK has decided, the link no longer changes anything.
     expect(
       (
         await h

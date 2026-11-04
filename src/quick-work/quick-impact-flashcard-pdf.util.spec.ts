@@ -34,6 +34,16 @@ describe('Quick Impact flashcard PDF', () => {
     ).toBe(1);
   });
 
+  it('renders a main goal plus up to four others on one page', async () => {
+    const pdf = await quickImpactFlashcardPdf(
+      partnerImpactFacts({ ...base, sdg: 3, secondarySdgs: [13, 7, 11, 15] }),
+    );
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(
+      (pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length,
+    ).toBe(1);
+  });
+
   it('does not throw on empty, very long or non-Latin text and with no SDG or target', async () => {
     const facts = partnerImpactFacts({
       ...base,

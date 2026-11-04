@@ -19,6 +19,7 @@ import {
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
   QUICK_WORK_MAX_PARTNERS,
+  QUICK_WORK_MAX_SDGS,
   QUICK_WORK_PARTNER_NAME_MAX,
   QUICK_WORK_REVIEW_NOTE_MAX,
   QUICK_WORK_SUMMARY_MAX,
@@ -225,6 +226,15 @@ export class SaveQuickWorkLogDto {
   @Min(1)
   @Max(17)
   sdg?: number | null;
+
+  /** Other goals besides the main `sdg` (up to four, goal numbers 1-17). Omit to leave them unchanged. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(QUICK_WORK_MAX_SDGS - 1)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(17, { each: true })
+  secondarySdgs?: number[];
 
   @IsOptional()
   @IsArray()

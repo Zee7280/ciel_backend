@@ -2432,6 +2432,8 @@ export class MailService {
       university: string;
       department: string;
       sdg: number | null;
+      /** Other goals besides the main one (older callers omit it). */
+      secondarySdgs?: number[];
       peopleReached: number | null;
       teamMinutes: number;
       evidenceCount: number;
@@ -2482,7 +2484,17 @@ export class MailService {
               ${row('Submitted by', esc(input.leadName))}
               ${row('Institution', [esc(c.university), esc(c.department)].filter(Boolean).join(' · '))}
               ${row('Participants', `${input.participants} · ${hours} team hours`)}
-              ${row('SDG', c.sdg ? `SDG ${c.sdg}` : '')}
+              ${row(
+                'SDG',
+                [c.sdg, ...(c.secondarySdgs ?? [])]
+                  .filter((n): n is number => typeof n === 'number')
+                  .map((n, i) =>
+                    i === 0 && c.secondarySdgs?.length
+                      ? `SDG ${n} (main)`
+                      : `SDG ${n}`,
+                  )
+                  .join(', '),
+              )}
               ${row('People reached', c.peopleReached != null ? String(c.peopleReached) : '')}
               ${row('Evidence', `${c.evidenceCount} file${c.evidenceCount === 1 ? '' : 's'}`)}
             </table>
@@ -2557,7 +2569,7 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <p>Dear ${this.escHtmlPlain(input.name?.trim() || 'Student')},</p>
-        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact. If you took part, approve it so the activity can be submitted and your hours counted. If you didn’t, reject it.</p>
+        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact. If you took part, approve it so your hours can be counted; the activity may be submitted without waiting for you, and hours are credited only to teammates who approve before CIEL PK’s final decision. If you didn’t take part, reject it.</p>
         <p>You can also answer from your Quick Impact Log after signing in at <a href="${loginLink}">cielpk.com</a>.</p>
         ${buttons}
         <p>Best regards,<br><strong>CIEL PK Team</strong></p>
@@ -2612,7 +2624,7 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <p>Dear ${this.escHtmlPlain(input.name?.trim() || 'Student')},</p>
-        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact on CIEL PK. You don’t have a CIEL student account yet, so please sign up first. The activity can only be submitted, and your hours counted, once you approve it.</p>
+        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact on CIEL PK. You don’t have a CIEL student account yet, so please sign up first. The activity may be submitted without waiting for you, but your hours can be counted only if you sign up and approve it before CIEL PK’s final decision.</p>
         <p style="margin: 22px 0;">
           <a href="${signupLink}" style="background-color: #0e7d74; color: #ffffff; padding: 11px 22px; text-decoration: none; border-radius: 6px; font-weight: bold;">Create your student account</a>
         </p>

@@ -2888,10 +2888,14 @@ export class MailService {
     );
     const pathEsc = this.escHtmlPlain(pathLabel);
     const nounEsc = this.escHtmlPlain(recordNoun);
+    const titleBlock = projectTitle?.trim()
+      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong></p>`
+      : '';
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <p>Dear ${facultyEsc},</p>
         <p><strong>${studentEsc}</strong> has created a ${pathEsc} ${nounEsc} on <strong>CIEL PK</strong> and selected you as their faculty supervisor.</p>
+        ${titleBlock}
         <p>Please log in to <a href="${dashboardLink}">CIELPK.com</a> to review the ${nounEsc.toLowerCase()}.</p>
         <p>Best regards,<br><strong>CIEL PK Team</strong></p>
       </div>
@@ -2900,7 +2904,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to,
-        subject: `${studentName?.trim() || 'A student'} selected you as their faculty supervisor on CIEL PK`,
+        subject: `${studentName?.trim() || 'A student'} selected you as their faculty supervisor${projectTitle?.trim() ? ` — ${projectTitle.trim()}` : ''} on CIEL PK`,
         html,
       });
       this.logger.log(
@@ -2909,6 +2913,62 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send ${pathLabel} connection email to faculty ${to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
+  /** Shared across Coursework/FYP — tells a university's CIEL PK account that one of its students
+   * has started a record, naming the project and (when chosen) the faculty supervisor. */
+  async sendPathProjectConnectedToUniversity(
+    to: string,
+    universityName: string,
+    studentName: string,
+    facultyName: string | undefined,
+    pathLabel: string,
+    projectTitle: string,
+    dashboardPath: string,
+    recordNoun: string = 'record',
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const dashboardLink = this.buildFrontendLink(dashboardPath, {});
+    const uniEsc = this.escHtmlPlain(
+      universityName?.trim() || 'your university',
+    );
+    const studentEsc = this.escHtmlPlain(studentName?.trim() || 'A student');
+    const pathEsc = this.escHtmlPlain(pathLabel);
+    const nounEsc = this.escHtmlPlain(recordNoun);
+    const titleBlock = projectTitle?.trim()
+      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong></p>`
+      : '';
+    const facultyLine = facultyName?.trim()
+      ? `<p>Faculty supervisor: <strong>${this.escHtmlPlain(facultyName.trim())}</strong></p>`
+      : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${uniEsc} team,</p>
+        <p><strong>${studentEsc}</strong>, a student of ${uniEsc}, has created a ${pathEsc} ${nounEsc.toLowerCase()} on <strong>CIEL PK</strong>.</p>
+        ${titleBlock}
+        ${facultyLine}
+        <p>You can follow its progress from your university dashboard at <a href="${dashboardLink}">CIELPK.com</a>.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: `${studentName?.trim() || 'A student'} started a ${pathLabel} ${recordNoun.toLowerCase()}${projectTitle?.trim() ? ` — ${projectTitle.trim()}` : ''} on CIEL PK`,
+        html,
+      });
+      this.logger.log(
+        `${pathLabel} connection email sent to university ${to} for "${projectTitle}"`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to send ${pathLabel} connection email to university ${to}`,
         (error as Error).stack,
       );
     }

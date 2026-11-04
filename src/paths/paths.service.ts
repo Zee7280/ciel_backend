@@ -248,7 +248,16 @@ export class PathsService implements OnModuleInit {
     const activeEmails = new Set(
       existing.filter((i) => i.status !== 'revoked').map((i) => i.email),
     );
-    const toInvite = members2.filter((m) => !activeEmails.has(m.email));
+    // The owner can never be their own teammate — typing their own address would mail them an
+    // invite to their own report and pin the badge on "invited" forever.
+    const inviter = await this.usersRepo.findOne({
+      where: { id: invitedByUserId },
+      select: ['id', 'email'],
+    });
+    const inviterEmail = (inviter?.email || '').trim().toLowerCase();
+    const toInvite = members2.filter(
+      (m) => !activeEmails.has(m.email) && m.email !== inviterEmail,
+    );
     for (const { email, name } of toInvite) {
       try {
         const existingUser = await this.usersRepo.findOne({
@@ -270,13 +279,21 @@ export class PathsService implements OnModuleInit {
             : {}),
         });
         await this.teamMemberInviteRepo.save(invite);
-        await this.mailService.sendPathTeamInvite(email, {
-          memberName: name ?? undefined,
-          inviterName,
-          kindLabel,
-          title,
-          token: invite.token,
-        });
+        // The invite row is committed before the caller builds its response, so the badge flips to
+        // "Invited" on this very save; the SMTP round-trip (with retries) is not awaited.
+        void this.mailService
+          .sendPathTeamInvite(email, {
+            memberName: name ?? undefined,
+            inviterName,
+            kindLabel,
+            title,
+            token: invite.token,
+          })
+          .catch((err) =>
+            this.logger.error(
+              `Team invite email to ${email} failed: ${(err as Error)?.message ?? err}`,
+            ),
+          );
       } catch (err) {
         // best-effort — see docstring — but must still be visible, or a stuck
         // invite (e.g. a bad row insert) silently pins the student's badge on
@@ -887,7 +904,7 @@ export class PathsService implements OnModuleInit {
     // block the save response on a slow or unreachable mail server — a save should never hang for
     // minutes just because notifying someone by email is slow. See the same pattern below on the
     // FYP/Venture equivalents.
-    void this.syncCourseProjectInvites(saved, userId).catch((err) =>
+    await this.syncCourseProjectInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
       ),
@@ -1130,8 +1147,8 @@ export class PathsService implements OnModuleInit {
         return repo.save(patched.entry);
       },
     );
-    // Fire-and-forget — see the comment on upsertCourseProject for why.
-    void this.syncCourseProjectInvites(saved, saved.userId).catch((err) =>
+    // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.syncCourseProjectInvites(saved, saved.userId).catch((err) =>
       this.logger.error(
         `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
       ),
@@ -2634,8 +2651,8 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    // Fire-and-forget — see the comment on upsertCourseProject for why.
-    void this.syncFypInvites(saved, userId).catch((err) =>
+    // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.syncFypInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
       ),
@@ -2777,8 +2794,8 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    // Fire-and-forget — see the comment on upsertCourseProject for why.
-    void this.syncFypInvites(saved, saved.userId).catch((err) =>
+    // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.syncFypInvites(saved, saved.userId).catch((err) =>
       this.logger.error(
         `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
       ),
@@ -2844,6 +2861,52 @@ export class PathsService implements OnModuleInit {
     });
   }
 
+  /** Emails of the university account(s) a student belongs to — the listed university
+   * organisation(s) matching the student's profile or the university typed on the record, using
+   * the same affiliation rule as the university dashboards. */
+  private async universityRecipientEmails(
+    studentUserId: string,
+    claimedUniversity: string | undefined,
+  ): Promise<{ name: string; emails: string[] }[]> {
+    const student = await this.usersRepo.findOne({
+      where: { id: studentUserId },
+      relations: ['organization'],
+    });
+    const orgs = await this.organizationsRepo
+      .createQueryBuilder('o')
+      .where('LOWER(o."orgType") = :t', { t: 'university' })
+      .getMany();
+    const out: { name: string; emails: string[] }[] = [];
+    for (const org of orgs) {
+      const affiliated = isAffiliatedWithUniversity(
+        {
+          organizationId: student?.organization?.id,
+          university: student?.university,
+          institution: student?.institution,
+          claims: [claimedUniversity ?? null],
+        },
+        { id: org.id, name: org.name },
+      );
+      if (!affiliated) continue;
+      const accounts = await this.usersRepo.find({
+        where: {
+          organization: { id: org.id },
+          role: In([UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN]),
+        },
+        select: ['id', 'email'],
+      });
+      const emails = [
+        ...new Set(
+          [org.contactEmail, ...accounts.map((a) => a.email)]
+            .map((e) => (e || '').trim().toLowerCase())
+            .filter((e) => /^\S+@\S+\.\S+$/.test(e)),
+        ),
+      ];
+      if (emails.length) out.push({ name: org.name, emails });
+    }
+    return out;
+  }
+
   /** Fires once — the moment a supervisor email is first attached to a draft FYP record, i.e. "one
    * master record, auto-connected to student + supervisor + university + CIEL PK". Best-effort: an
    * email failure here must never fail the student's autosave. */
@@ -2863,6 +2926,25 @@ export class PathsService implements OnModuleInit {
           title,
           '/dashboard/faculty/fyp-thesis',
         );
+      }
+      const alreadyMailed = new Set([supervisorEmail.toLowerCase()]);
+      for (const uni of await this.universityRecipientEmails(
+        entry.userId,
+        pi.university,
+      )) {
+        for (const to of uni.emails) {
+          if (alreadyMailed.has(to)) continue;
+          alreadyMailed.add(to);
+          await this.mailService.sendPathProjectConnectedToUniversity(
+            to,
+            uni.name,
+            studentName,
+            supervisorEmail ? supervisorName : undefined,
+            'Final Year Project',
+            title,
+            '/dashboard/partner/university-showcase',
+          );
+        }
       }
       await this.mailService.sendPathProjectConnectedToCielPk(
         studentName,
@@ -3789,8 +3871,8 @@ export class PathsService implements OnModuleInit {
   }
 
   private async afterVentureSave(saved: VentureEntry, userId: string) {
-    // Fire-and-forget — see the comment on upsertCourseProject for why.
-    void this.syncVentureInvites(saved, userId).catch((err) =>
+    // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.syncVentureInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncVentureInvites failed for ${saved.id}: ${(err as Error)?.message}`,
       ),

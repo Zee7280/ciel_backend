@@ -419,6 +419,8 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
 
 export type StudioCandidate = {
   id: string;
+  /** Public record id (CIEL-BNU-2026-0421), when the report has one. */
+  publicId?: string | null;
   title: string;
   /** Eligibility gate result. Only 'Eligible' / 'Ranked' packages can take part in a ranking. */
   gateOk: boolean;

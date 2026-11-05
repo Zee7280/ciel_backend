@@ -418,6 +418,7 @@ export class NpeRankingService {
     ).length;
     const candidates: StudioCandidate[] = rows.map((r) => ({
       id: r.id,
+      publicId: r.package?.publicId ?? null,
       title: r.title,
       gateOk: r.status === 'Ready' || r.status === 'Ranked',
       evaluated: r.status === 'Ranked' && !!r.scoreBreakdown,

@@ -50,6 +50,8 @@ export const SDG_COLORS = [
 /** The slice of a log these helpers read. */
 export type PartnerImpactLog = {
   id: string;
+  /** Public record id (CIEL-BNU-2026-0421), when one has been issued. */
+  publicId?: string | null;
   title: string;
   activityType: string;
   activityTypeOther?: string | null;
@@ -157,6 +159,7 @@ export function partnerImpactFacts(log: PartnerImpactLog) {
   const other = (log.activityTypeOther ?? '').trim();
   return {
     id: log.id,
+    publicId: log.publicId ?? null,
     title: (log.title || 'Community activity').trim(),
     activityType:
       log.activityType === 'Other service activity' && other

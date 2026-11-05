@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
@@ -66,6 +67,7 @@ import {
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { RecordIdsService } from '../record-ids/record-ids.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -120,6 +122,7 @@ export class PathsService implements OnModuleInit {
     @InjectRepository(PathGraderRun)
     private readonly graderRunRepo: Repository<PathGraderRun>,
     private readonly aiService: AiService,
+    @Optional() private readonly recordIds?: RecordIdsService,
   ) {}
 
   /** One-row-era unique index on userId blocks Create for FYP and Venture. Entities are @Index()
@@ -718,6 +721,7 @@ export class PathsService implements OnModuleInit {
           title,
           '/dashboard/faculty/coursework-projects',
           'Opportunity',
+          entry.publicId,
         );
       }
       await this.mailService.sendPathProjectConnectedToCielPk(
@@ -904,6 +908,7 @@ export class PathsService implements OnModuleInit {
     // block the save response on a slow or unreachable mail server — a save should never hang for
     // minutes just because notifying someone by email is slow. See the same pattern below on the
     // FYP/Venture equivalents.
+    await this.recordIds?.stampOnto('coursework', saved);
     await this.syncCourseProjectInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
@@ -1148,6 +1153,7 @@ export class PathsService implements OnModuleInit {
       },
     );
     // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.recordIds?.stampOnto('coursework', saved);
     await this.syncCourseProjectInvites(saved, saved.userId).catch((err) =>
       this.logger.error(
         `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
@@ -1244,6 +1250,7 @@ export class PathsService implements OnModuleInit {
     org: Pick<Organization, 'id' | 'name'>,
     entryUniversityExpr: string,
     prefix: string,
+    universityId: string | null = null,
   ): Brackets {
     const entry = universityNameMatchSql(
       entryUniversityExpr,
@@ -1265,14 +1272,23 @@ export class PathsService implements OnModuleInit {
         .orWhere(entry.sql, entry.params)
         .orWhere(uni.sql, uni.params)
         .orWhere(inst.sql, inst.params);
+      // A record stamped with its university (public id issued) belongs to that university.
+      if (universityId) {
+        b.orWhere(`e."universityId"::text = :${prefix}UniRow`, {
+          [`${prefix}UniRow`]: universityId,
+        });
+      }
     });
   }
 
   /** Keeps the entries whose student belongs to the university by the shared affiliation rule. */
-  private async keepUniversityEntries<T extends { userId: string }>(
+  private async keepUniversityEntries<
+    T extends { userId: string; universityId?: string | null },
+  >(
     entries: T[],
     org: Pick<Organization, 'id' | 'name'>,
     entryUniversity: (entry: T) => unknown,
+    universityId: string | null = null,
   ): Promise<T[]> {
     const userIds = [...new Set(entries.map((e) => e.userId).filter(Boolean))];
     if (!userIds.length) return [];
@@ -1282,6 +1298,11 @@ export class PathsService implements OnModuleInit {
     });
     const byId = new Map(users.map((u) => [u.id, u]));
     return entries.filter((entry) => {
+      // A stamped record stays with the university that issued its public id, whatever the
+      // student's profile says later; only unstamped (older) records fall back to the name rule.
+      if (universityId && entry.universityId) {
+        return entry.universityId === universityId;
+      }
       const user = byId.get(entry.userId);
       const claim = entryUniversity(entry);
       return isAffiliatedWithUniversity(
@@ -1309,6 +1330,8 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
+    const universityId =
+      (await this.recordIds?.universityIdForOrganization(org.id)) ?? null;
     const qb = this.courseProjectRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
@@ -1318,6 +1341,7 @@ export class PathsService implements OnModuleInit {
           org,
           `e."studentInfo"->>'universityName'`,
           'cp',
+          universityId,
         ),
       );
     // Enforced here, not left to the caller: the "Coursework Impact Wall" must only ever be
@@ -1331,6 +1355,7 @@ export class PathsService implements OnModuleInit {
       await qb.orderBy('e."updatedAt"', 'DESC').getMany(),
       org,
       (e: CourseProjectEntry) => e.studentInfo?.universityName,
+      universityId,
     );
     const annotated = await this.courseProjectAnnotate(entries);
     return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
@@ -2485,6 +2510,8 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
+    const universityId =
+      (await this.recordIds?.universityIdForOrganization(org.id)) ?? null;
     const qb = this.fypRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
@@ -2494,6 +2521,7 @@ export class PathsService implements OnModuleInit {
           org,
           `e."projectInfo"->>'university'`,
           'fyp',
+          universityId,
         ),
       );
     // Enforced here, not left to the caller: the "FYP Impact Wall" must only ever be able to
@@ -2508,6 +2536,7 @@ export class PathsService implements OnModuleInit {
       org,
       (e: FypEntry) =>
         (e.projectInfo as { university?: string } | null)?.university,
+      universityId,
     );
     const annotated = await this.fypAnnotate(entries);
     return this.attachStudents(annotated);
@@ -2652,6 +2681,7 @@ export class PathsService implements OnModuleInit {
       return repo.save(patched.entry);
     });
     // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.recordIds?.stampOnto('fyp', saved);
     await this.syncFypInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
@@ -2795,6 +2825,7 @@ export class PathsService implements OnModuleInit {
       return repo.save(patched.entry);
     });
     // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.recordIds?.stampOnto('fyp', saved);
     await this.syncFypInvites(saved, saved.userId).catch((err) =>
       this.logger.error(
         `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
@@ -2925,6 +2956,8 @@ export class PathsService implements OnModuleInit {
           'Final Year Project',
           title,
           '/dashboard/faculty/fyp-thesis',
+          'record',
+          entry.publicId,
         );
       }
       const alreadyMailed = new Set([supervisorEmail.toLowerCase()]);
@@ -2943,6 +2976,8 @@ export class PathsService implements OnModuleInit {
             'Final Year Project',
             title,
             '/dashboard/partner/university-showcase',
+            'record',
+            entry.publicId,
           );
         }
       }
@@ -3872,6 +3907,7 @@ export class PathsService implements OnModuleInit {
 
   private async afterVentureSave(saved: VentureEntry, userId: string) {
     // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
+    await this.recordIds?.stampOnto('startup', saved);
     await this.syncVentureInvites(saved, userId).catch((err) =>
       this.logger.error(
         `syncVentureInvites failed for ${saved.id}: ${(err as Error)?.message}`,
@@ -4096,6 +4132,8 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
+    const universityId =
+      (await this.recordIds?.universityIdForOrganization(org.id)) ?? null;
     const qb = this.ventureRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
@@ -4105,6 +4143,7 @@ export class PathsService implements OnModuleInit {
           org,
           `e."academicSetup"->>'university'`,
           'vent',
+          universityId,
         ),
       );
     // Enforced here, not left to the caller: the university venture wall must only ever be able
@@ -4119,6 +4158,7 @@ export class PathsService implements OnModuleInit {
       org,
       (e: VentureEntry) =>
         (e.academicSetup as { university?: string } | null)?.university,
+      universityId,
     );
     const annotated = await this.ventureAnnotate(entries);
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);

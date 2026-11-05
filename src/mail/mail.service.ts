@@ -2875,6 +2875,7 @@ export class MailService {
     projectTitle: string,
     dashboardPath: string,
     recordNoun: string = 'record',
+    recordId?: string | null,
   ): Promise<void> {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -2889,7 +2890,7 @@ export class MailService {
     const pathEsc = this.escHtmlPlain(pathLabel);
     const nounEsc = this.escHtmlPlain(recordNoun);
     const titleBlock = projectTitle?.trim()
-      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong></p>`
+      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong>${recordId ? `<br><span style="font-size:12px;color:#666;">ID <strong>${this.escHtmlPlain(recordId)}</strong></span>` : ''}</p>`
       : '';
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -2929,6 +2930,7 @@ export class MailService {
     projectTitle: string,
     dashboardPath: string,
     recordNoun: string = 'record',
+    recordId?: string | null,
   ): Promise<void> {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -2941,7 +2943,7 @@ export class MailService {
     const pathEsc = this.escHtmlPlain(pathLabel);
     const nounEsc = this.escHtmlPlain(recordNoun);
     const titleBlock = projectTitle?.trim()
-      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong></p>`
+      ? `<p style="margin:12px 0;padding:10px 14px;background:#f5f7f6;border-left:4px solid #174b43;border-radius:4px;"><span style="font-size:12px;color:#666;">${pathEsc} title</span><br><strong>${this.escHtmlPlain(projectTitle.trim())}</strong>${recordId ? `<br><span style="font-size:12px;color:#666;">ID <strong>${this.escHtmlPlain(recordId)}</strong></span>` : ''}</p>`
       : '';
     const facultyLine = facultyName?.trim()
       ? `<p>Faculty supervisor: <strong>${this.escHtmlPlain(facultyName.trim())}</strong></p>`

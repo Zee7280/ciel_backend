@@ -157,6 +157,7 @@ export class NpeStudioService {
       /** Combined Project Package Library: every package with its readiness, never a rank. */
       packages: pool.candidates.map((c) => ({
         id: c.id,
+        publicId: c.publicId ?? null,
         title: c.title,
         university: c.facets.university,
         department: c.facets.department,

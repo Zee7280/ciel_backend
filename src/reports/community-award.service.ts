@@ -35,6 +35,8 @@ export type PublishedRankingStanding = {
 
 export type CommunityAwardCard = {
   id: string;
+  /** Public record id (CIEL-BNU-2026-0421); null for older reports not yet stamped. */
+  public_id: string | null;
   studentId: string;
   student_name: string;
   project_title: string;
@@ -100,6 +102,7 @@ export class CommunityAwardService {
       : 0;
     return {
       id: report.id,
+      public_id: report.publicId ?? null,
       studentId: report.studentId,
       student_name: report.student?.name || lead?.name || 'Student',
       project_title:

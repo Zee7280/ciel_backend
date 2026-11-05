@@ -8,6 +8,7 @@ import {
   JoinColumn,
   BeforeInsert,
   BeforeUpdate,
+  Index,
 } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { User } from '../../users/entities/user.entity';
@@ -518,6 +519,18 @@ export class StudentReport {
    */
   @Column({ name: 'review_package', type: 'jsonb', nullable: true })
   review_package: Record<string, unknown> | null;
+
+  /** Canonical university (universities.id) this record belongs to — set when its public id is issued. */
+  @Index()
+  // update:false — only RecordIdsService writes this (raw SQL). A stale entity saved later must
+  // never write its old NULL over an id another request just issued.
+  @Column({ type: 'uuid', nullable: true, update: false })
+  universityId?: string | null;
+
+  /** Public, human-readable id (CIEL-BNU-2026-0421). Issued once, never changed or reused. */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 32, nullable: true, update: false })
+  publicId?: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

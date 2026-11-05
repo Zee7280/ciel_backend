@@ -17,6 +17,7 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RecordIdsService } from '../record-ids/record-ids.service';
 import { QuickImpactPartnerService } from './quick-impact-partner.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { universityNamesMatch } from '../opportunities/university-scope.util';
@@ -148,6 +149,7 @@ export class QuickWorkService {
     @Optional()
     @InjectRepository(FacultyUniversityConfirmation)
     private readonly facultyConfirmations?: Repository<FacultyUniversityConfirmation>,
+    @Optional() private readonly recordIds?: RecordIdsService,
   ) {}
 
   /* ------------------------------------------------------------------ reads */
@@ -843,6 +845,8 @@ export class QuickWorkService {
     if (!result.affected) {
       throw new ConflictException('This log was already submitted.');
     }
+    // Public id (CIEL-BNU-2026-0421) — issued once, on the first submit; a resubmit keeps it.
+    await this.recordIds?.issueSafely('quick_impact', log.id);
 
     const lead = log.participants.find((p) => p.isLead);
     const submittedToday = await this.logRepo
@@ -1153,6 +1157,7 @@ export class QuickWorkService {
       const lead = participants.find((p) => p.isLead);
       return {
         id: l.id,
+        publicId: l.publicId ?? null,
         title: l.title,
         status: l.status,
         activityDate: l.activityDate,
@@ -1284,6 +1289,7 @@ export class QuickWorkService {
     ).length;
     const summary = {
       id: log.id,
+      publicId: log.publicId ?? null,
       title: log.title,
       status: log.status,
       participants: log.participants.length,
@@ -1416,6 +1422,7 @@ export class QuickWorkService {
         .sort((a, b) => Number(b.isLead) - Number(a.isLead))
         .map((p) => ({
           logId: log.id,
+          publicId: log.publicId ?? '',
           title: log.title,
           status: log.status,
           activityType: quickWorkActivityLabel(log),
@@ -1979,6 +1986,7 @@ export class QuickWorkService {
       }));
     const view = {
       id: log.id,
+      publicId: log.publicId ?? null,
       status: log.status,
       mode: log.mode,
       university: log.university,

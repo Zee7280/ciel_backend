@@ -3,8 +3,12 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AttendanceSlaService } from '../engagement/attendance-sla.service';
 import { ParticipationReconcileService } from '../engagement/participation-reconcile.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { RecordIdsService } from '../record-ids/record-ids.service';
 
 export const NIGHTLY_JOBS_AUDIT_ACTION = 'PLATFORM_NIGHTLY_JOBS_RUN';
+
+/** Existing records stamped with a public id per nightly run; the job drains the backlog and then idles. */
+export const NIGHTLY_RECORD_ID_BATCH = 500;
 
 export type NightlyJobsRunResult = {
   success: boolean;
@@ -22,6 +26,13 @@ export type NightlyJobsRunResult = {
     duplicate_leads_normalized: number;
     scanned_teams: number;
   } | null;
+  /** Public-id backfill of older records (null when the module is absent). Never affects `success`. */
+  record_ids: {
+    issued: number;
+    remaining: number;
+    unmatched: number;
+  } | null;
+  record_ids_error: string | null;
   error: string | null;
 };
 
@@ -44,6 +55,7 @@ export class PlatformJobsService {
     private readonly attendanceSlaService: AttendanceSlaService,
     private readonly participationReconcileService: ParticipationReconcileService,
     @Optional() private readonly auditLogs?: AuditLogsService,
+    @Optional() private readonly recordIds?: RecordIdsService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
@@ -70,6 +82,8 @@ export class PlatformJobsService {
       duration_ms: 0,
       attendance_sla: null,
       enrollment_reconcile: null,
+      record_ids: null,
+      record_ids_error: null,
       error: null,
     };
     try {
@@ -81,6 +95,25 @@ export class PlatformJobsService {
     } catch (err) {
       result.error = err instanceof Error ? err.message : String(err);
       this.logger.error(`Nightly platform jobs failed: ${result.error}`);
+    }
+    // Older records get their public id in the background, a batch a night (idempotent, resumable,
+    // oldest first). Isolated: a failure here is reported but never fails the jobs above, and the
+    // jobs above never block it.
+    if (this.recordIds) {
+      try {
+        const r = await this.recordIds.backfill(false, NIGHTLY_RECORD_ID_BATCH);
+        result.record_ids = {
+          issued: r.idsIssued,
+          remaining: r.remaining,
+          unmatched: r.unmatched.reduce((t, u) => t + u.records, 0),
+        };
+      } catch (err) {
+        result.record_ids_error =
+          err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `Nightly record-id backfill failed: ${result.record_ids_error}`,
+        );
+      }
     }
     const finishedAt = new Date();
     result.finished_at = finishedAt.toISOString();

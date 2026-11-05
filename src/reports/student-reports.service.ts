@@ -1,3 +1,4 @@
+import { RecordIdsService } from '../record-ids/record-ids.service';
 import {
   Injectable,
   BadRequestException,
@@ -254,6 +255,7 @@ export class StudentReportsService {
     @Optional() private readonly notificationsService?: NotificationsService,
     @Optional()
     private readonly opportunityApplicationsService?: OpportunityApplicationsService,
+    @Optional() private readonly recordIds?: RecordIdsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: unknown): boolean {
@@ -412,6 +414,7 @@ export class StudentReportsService {
   reportVerificationPayload(report: StudentReport) {
     const slug = report.verificationPublicSlug?.trim() || null;
     return {
+      public_id: report.publicId ?? null,
       verification_public_slug: slug,
       certificate_verification_code: formatCertificateVerificationCode(slug),
       impact_verify_url: this.buildImpactVerifyUrl(slug),
@@ -4101,6 +4104,14 @@ export class StudentReportsService {
 
     // Save report to get ID (verification_public_slug filled in entity @BeforeInsert/@BeforeUpdate)
     await this.studentReportsRepository.save(report);
+
+    // Public id (CIEL-BNU-2026-0421) — issued once, on the first real submit; a draft or a
+    // resubmit never changes it.
+    if (shouldSubmit) {
+      await this.recordIds?.stampOnto('community_engagement', report, {
+        at: report.reportSubmittedAt ?? undefined,
+      });
+    }
 
     // Save files if any
     if (files && files.length > 0) {

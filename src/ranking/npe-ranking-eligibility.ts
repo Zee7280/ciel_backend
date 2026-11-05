@@ -11,6 +11,8 @@ import { NPE_CII_SCALE, type NpePackageStatus } from './npe-ranking.constants';
 
 export type NpePackageRecord = {
   id: string;
+  /** Public record id (CIEL-BNU-2026-0421); null for older reports not yet stamped. */
+  publicId?: string | null;
   title: string;
   university: string;
   pathway: string;
@@ -155,6 +157,7 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
     : [];
   return {
     id: report.id,
+    publicId: report.publicId ?? null,
     title:
       report.opportunity?.title || report.project_id || 'Community service',
     university: npeUniversity(report),

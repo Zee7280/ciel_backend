@@ -1,3 +1,4 @@
+import { RecordIdsModule } from './record-ids/record-ids.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -46,6 +47,7 @@ import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
 import { AiModule } from './ai/ai.module';
 import { NpeRankingModule } from './ranking/npe-ranking.module';
 import { widenColumnsBeforeSync } from './database/widen-columns-before-sync';
+import { prepareRecordIdsBeforeSync } from './database/record-ids-before-sync';
 
 @Module({
   imports: [
@@ -74,6 +76,8 @@ import { widenColumnsBeforeSync } from './database/widen-columns-before-sync';
         };
         // synchronize would drop and re-add a column whose length grew; widen those first.
         await widenColumnsBeforeSync(connection);
+        // Public record ids: add their columns/indexes the moment this deploy boots (never throws).
+        await prepareRecordIdsBeforeSync(connection);
         return {
           type: 'postgres' as const,
           ...connection,
@@ -107,6 +111,7 @@ import { widenColumnsBeforeSync } from './database/widen-columns-before-sync';
     PlatformStatsModule,
     SupportModule,
     IssueLogsModule,
+    RecordIdsModule,
     OrganizationMembershipModule,
     StudentSubscriptionModule,
     FeedbackModule,

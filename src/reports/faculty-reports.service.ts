@@ -875,6 +875,7 @@ export class FacultyReportsService {
           null;
         return {
           id: r.id,
+          public_id: r.publicId ?? null,
           student_name: r.student?.name || 'Unknown',
           student_email: r.student?.email || null,
           project_title: r.opportunity?.title || r.project_id,

@@ -208,6 +208,54 @@ function textOf(value: unknown, fallback: string): string {
 }
 
 /**
+ * Section 2.3 (risk, safeguarding & consent) is for the admin evidence & ethics review and the
+ * university safeguarding register. It must never reach an AI prompt, so the Section 2
+ * summary / evaluation prompts (which quote the whole saved section) get a copy without it.
+ */
+const SAFEGUARDING_FIELD_KEYS = [
+  'risk_factors',
+  'risk_mitigation',
+  'risk_consent',
+  'risk_safeguarding_lead',
+  'risk_unresolved',
+] as const;
+
+export function withoutSafeguardingFields<T>(data: T): T {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const copy = { ...(data as Record<string, unknown>) };
+  for (const key of SAFEGUARDING_FIELD_KEYS) delete copy[key];
+  return copy as T;
+}
+
+/**
+ * Section 10 · 9.5 "Follow-up check" only records who will check the results later. It holds a
+ * third party's name and email and must not influence scoring ("Not planned" is not a failure),
+ * so the Section 10 summary / evaluation prompts (which quote the whole saved section) get a
+ * copy without it.
+ */
+const FOLLOWUP_FIELD_KEYS = [
+  'followup_plan',
+  'followup_no_reason',
+  'followup_no_reason_other',
+  'followup_decision_owner',
+  'followup_owner_role',
+  'followup_owner_name',
+  'followup_owner_email',
+  'followup_interval',
+  'followup_custom_date',
+  'followup_due_date',
+  'followup_check',
+  'followup_check_notes',
+] as const;
+
+export function withoutFollowUpFields<T>(data: T): T {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const copy = { ...(data as Record<string, unknown>) };
+  for (const key of FOLLOWUP_FIELD_KEYS) delete copy[key];
+  return copy as T;
+}
+
+/**
  * Loose view of the saved wizard section payloads that the flashcard prompts quote field by
  * field. The values are whatever the student wizard stored; the prompt stringifies them as-is.
  */
@@ -2050,11 +2098,19 @@ ${JSON.stringify(data)}`;
     const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
     const isNpeRanking = section === 'npe_ranking_evaluation';
+    const isSection2Prompt =
+      section === 'section2' || section === 'section2_evaluation';
+    const isSection10Prompt =
+      section === 'section10_summary' || section === 'section10_evaluation';
     const prompt = this.buildPrompt(
       section,
       (isCiiV45Evaluation
         ? slimCiiPayloadForModel(data)
-        : data) as SectionPromptData,
+        : isSection2Prompt
+          ? withoutSafeguardingFields(data)
+          : isSection10Prompt
+            ? withoutFollowUpFields(data)
+            : data) as SectionPromptData,
     );
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation

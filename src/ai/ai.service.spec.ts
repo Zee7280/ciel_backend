@@ -1,4 +1,8 @@
-import { AiService } from './ai.service';
+import {
+  AiService,
+  withoutFollowUpFields,
+  withoutSafeguardingFields,
+} from './ai.service';
 
 const OK_BODY = JSON.stringify({
   choices: [{ message: { content: 'Plain summary text' } }],
@@ -475,4 +479,98 @@ describe('AiService.generateOpportunityDraft', () => {
       new AiService().generateOpportunityDraft({ idea: 'tree plantation' }),
     ).rejects.toMatchObject({ status: 429 });
   });
+});
+
+describe('Section 2.3 safeguarding data never reaches an AI prompt', () => {
+  const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  afterEach(() => {
+    global.fetch = realFetch;
+    process.env.OPENAI_API_KEY = realKey;
+  });
+
+  const section2 = {
+    problem_statement: 'Children had no safe classroom lighting.',
+    affected_group: 'Children aged 5-12',
+    system_gaps: ['Infrastructure'],
+    discipline: 'Engineering',
+    discipline_contribution: 'We audited the wiring.',
+    risk_factors: ['children_present'],
+    risk_mitigation: 'SECRET-MITIGATION-TEXT',
+    risk_consent: 'written',
+    risk_safeguarding_lead: 'SECRET-LEAD-NAME',
+    risk_unresolved: 'SECRET-UNRESOLVED-TEXT',
+  };
+
+  it('withoutSafeguardingFields drops only the five risk_* answers and does not mutate the input', () => {
+    const out = withoutSafeguardingFields(section2) as Record<string, unknown>;
+    expect(Object.keys(out).filter((k) => k.startsWith('risk_'))).toEqual([]);
+    expect(out.problem_statement).toBe(section2.problem_statement);
+    expect(section2.risk_mitigation).toBe('SECRET-MITIGATION-TEXT');
+    expect(withoutSafeguardingFields(null)).toBeNull();
+  });
+
+  it.each(['section2', 'section2_evaluation'])(
+    'the %s prompt contains none of the safeguarding text',
+    async (section) => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+      global.fetch = f as never;
+      await new AiService().summarize(section, section2);
+      const sent = JSON.stringify(sentBody(f).messages);
+      expect(sent).toContain('Children had no safe classroom lighting.');
+      expect(sent).not.toContain('SECRET-');
+      expect(sent).not.toContain('risk_');
+    },
+  );
+});
+
+describe('Section 10 · 9.5 follow-up data never reaches an AI prompt', () => {
+  const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  afterEach(() => {
+    global.fetch = realFetch;
+    process.env.OPENAI_API_KEY = realKey;
+  });
+
+  const section10 = {
+    continuation_status: 'partially',
+    continuation_details: 'Weekly tutoring stops unless staff take it over.',
+    mechanisms: ['Partner-led continuation'],
+    scaling_potential: 'Not scalable',
+    policy_influence: 'No',
+    followup_plan: 'yes',
+    followup_owner_role: 'SECRET-ROLE',
+    followup_owner_name: 'SECRET-NAME',
+    followup_owner_email: 'secret-contact@example.org',
+    followup_due_date: '2027-02-05',
+    followup_check_notes: 'SECRET-NOTES',
+  };
+
+  it('withoutFollowUpFields drops only the followup_* answers and does not mutate the input', () => {
+    const out = withoutFollowUpFields(section10) as Record<string, unknown>;
+    expect(Object.keys(out).filter((k) => k.startsWith('followup_'))).toEqual(
+      [],
+    );
+    expect(out.continuation_status).toBe('partially');
+    expect(section10.followup_owner_email).toBe('secret-contact@example.org');
+    expect(withoutFollowUpFields(undefined)).toBeUndefined();
+  });
+
+  it.each(['section10_summary', 'section10_evaluation'])(
+    'the %s prompt contains none of the follow-up data',
+    async (section) => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+      global.fetch = f as never;
+      await new AiService().summarize(section, section10);
+      const sent = JSON.stringify(sentBody(f).messages);
+      expect(sent).toContain(
+        'Weekly tutoring stops unless staff take it over.',
+      );
+      expect(sent).not.toContain('SECRET-');
+      expect(sent).not.toContain('secret-contact');
+      expect(sent).not.toContain('followup_');
+    },
+  );
 });

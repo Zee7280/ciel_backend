@@ -587,6 +587,142 @@ describe('validateReportSectionsForSubmit', () => {
     ).toBe(true);
   });
 
+  describe('Section 10 · 9.5 follow-up check', () => {
+    const withFollowUp = (extra: Record<string, unknown>) =>
+      validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section10: { ...VALID_CORE_SECTIONS.section10, ...extra },
+      }).filter((i) => i.field.startsWith('followup_'));
+
+    it('never blocks a report saved before 9.5 existed (no followup_* keys)', () => {
+      expect(withFollowUp({})).toEqual([]);
+      expect(withFollowUp({ followup_plan: '' })).toEqual([]);
+      expect(withFollowUp({ followup_plan: null })).toEqual([]);
+    });
+
+    it('never blocks "Not decided yet"', () => {
+      expect(
+        withFollowUp({
+          followup_plan: 'later',
+          followup_decision_owner: 'faculty',
+        }),
+      ).toEqual([]);
+    });
+
+    it('requires a reason when no follow-up is planned, and text when the reason is Other', () => {
+      expect(withFollowUp({ followup_plan: 'no' }).map((i) => i.field)).toEqual(
+        ['followup_no_reason'],
+      );
+      expect(
+        withFollowUp({ followup_plan: 'no', followup_no_reason: 'Other' }).map(
+          (i) => i.field,
+        ),
+      ).toEqual(['followup_no_reason_other']);
+      expect(
+        withFollowUp({
+          followup_plan: 'no',
+          followup_no_reason: 'Follow-up is not feasible',
+        }),
+      ).toEqual([]);
+    });
+
+    it('requires the contact, a valid email and a due date when a follow-up is planned', () => {
+      expect(
+        withFollowUp({ followup_plan: 'yes' })
+          .map((i) => i.field)
+          .sort(),
+      ).toEqual([
+        'followup_due_date',
+        'followup_owner_email',
+        'followup_owner_name',
+        'followup_owner_role',
+      ]);
+      const bad = withFollowUp({
+        followup_plan: 'yes',
+        followup_owner_role: 'Faculty supervisor',
+        followup_owner_name: 'Dr Khan',
+        followup_owner_email: 'not-an-email',
+        followup_due_date: '2027-02-30',
+      });
+      expect(bad.map((i) => i.field).sort()).toEqual([
+        'followup_due_date',
+        'followup_owner_email',
+      ]);
+    });
+
+    it('accepts a fully answered follow-up (instruction stays optional)', () => {
+      expect(
+        withFollowUp({
+          followup_plan: 'yes',
+          followup_owner_role: 'Faculty supervisor',
+          followup_owner_name: 'Dr Khan',
+          followup_owner_email: 'khan@example.org',
+          followup_due_date: '2027-02-05',
+          followup_check: 'Whether the reported benefits are still continuing',
+        }),
+      ).toEqual([]);
+    });
+
+    it('ignores stale contact fields once the plan is no longer "yes"', () => {
+      expect(
+        withFollowUp({
+          followup_plan: 'later',
+          followup_owner_email: 'garbage',
+        }),
+      ).toEqual([]);
+    });
+  });
+
+  describe('Section 2.3 risk, safeguarding & consent', () => {
+    const withRisk = (extra: Record<string, unknown>) =>
+      validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section2: { ...VALID_CORE_SECTIONS.section2, ...extra },
+      }).filter((i) => i.field.startsWith('risk_'));
+
+    it('never blocks a report saved before 2.3 existed (no risk_* keys)', () => {
+      expect(withRisk({})).toEqual([]);
+    });
+
+    it('never blocks "None identified" or an empty chip list', () => {
+      expect(withRisk({ risk_factors: ['none'] })).toEqual([]);
+      expect(withRisk({ risk_factors: [] })).toEqual([]);
+      expect(withRisk({ risk_factors: null })).toEqual([]);
+    });
+
+    it('requires mitigation, consent and the on-site lead once a real risk is selected', () => {
+      const fields = withRisk({ risk_factors: ['children_present'] }).map(
+        (i) => i.field,
+      );
+      expect(fields.sort()).toEqual([
+        'risk_consent',
+        'risk_mitigation',
+        'risk_safeguarding_lead',
+      ]);
+    });
+
+    it('accepts a fully answered block (unresolved stays optional)', () => {
+      expect(
+        withRisk({
+          risk_factors: ['children_present', 'beneficiary_photos'],
+          risk_mitigation: 'Partner staff in every session.',
+          risk_consent: 'written',
+          risk_safeguarding_lead: 'Village Director',
+        }),
+      ).toEqual([]);
+    });
+
+    it('treats whitespace-only answers as missing and ignores a stray "none" next to a real risk', () => {
+      const issues = withRisk({
+        risk_factors: ['none', 'travel_to_site'],
+        risk_mitigation: '   ',
+        risk_consent: 'verbal',
+        risk_safeguarding_lead: 'Mr Khan, coordinator',
+      });
+      expect(issues.map((i) => i.field)).toEqual(['risk_mitigation']);
+    });
+  });
+
   it('requires Section 2 affected group, count, gaps, and discipline contribution', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,

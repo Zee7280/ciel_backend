@@ -156,6 +156,110 @@ function hasChosenValue(value: unknown): boolean {
   );
 }
 
+/** "None identified" chip id — keep in sync with the frontend utils/riskSafeguarding.ts. */
+const RISK_NONE_ID = 'none';
+
+/**
+ * Section 2.3 (risk, safeguarding & consent). Backward compatible on purpose: a report with no
+ * risk chips (saved before 2.3 existed, or "None identified") is never blocked; once a real
+ * risk is selected the mitigation, consent status and on-site lead become required.
+ */
+export function validateRiskSafeguarding(
+  section2: Record<string, unknown>,
+): ReportSubmitValidationIssue[] {
+  const factors = Array.isArray(section2.risk_factors)
+    ? section2.risk_factors.filter(
+        (f) => typeof f === 'string' && f.trim() && f !== RISK_NONE_ID,
+      )
+    : [];
+  if (factors.length === 0) return [];
+  const issues: ReportSubmitValidationIssue[] = [];
+  if (!stringField(section2.risk_mitigation).trim()) {
+    issues.push({
+      section: 2,
+      field: 'risk_mitigation',
+      message: 'Say what you did to manage the risks you selected',
+    });
+  }
+  if (!stringField(section2.risk_consent).trim()) {
+    issues.push({
+      section: 2,
+      field: 'risk_consent',
+      message: 'Choose the consent status for photos and data',
+    });
+  }
+  if (!stringField(section2.risk_safeguarding_lead).trim()) {
+    issues.push({
+      section: 2,
+      field: 'risk_safeguarding_lead',
+      message: 'Name the person responsible for safeguarding on site',
+    });
+  }
+  return issues;
+}
+
+const FOLLOWUP_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const FOLLOWUP_OTHER = 'Other';
+
+function isIsoDate(value: unknown): boolean {
+  const raw = stringField(value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+/**
+ * Section 10 · 9.5 "Follow-up check". Backward compatible on purpose: a report with no
+ * followup_plan (saved before 9.5 existed, or still unanswered) and "Not decided yet" are never
+ * blocked. "No" needs a reason; "Yes" needs the responsible role, name, a valid email and a due
+ * date. Mirrors the frontend utils/sustainabilityFollowup.ts.
+ */
+export function validateFollowUp(
+  section10: Record<string, unknown>,
+): ReportSubmitValidationIssue[] {
+  const plan = stringField(section10.followup_plan).trim();
+  const issues: ReportSubmitValidationIssue[] = [];
+  const add = (field: string, message: string) =>
+    issues.push({ section: 10, field, message });
+  if (plan === 'no') {
+    const reason = stringField(section10.followup_no_reason).trim();
+    if (!reason) {
+      add('followup_no_reason', 'Select a brief reason for no follow-up');
+    } else if (
+      reason === FOLLOWUP_OTHER &&
+      !stringField(section10.followup_no_reason_other).trim()
+    ) {
+      add('followup_no_reason_other', 'Add a short explanation');
+    }
+  } else if (plan === 'yes') {
+    if (!stringField(section10.followup_owner_role).trim()) {
+      add('followup_owner_role', 'Choose who will check the results');
+    }
+    if (!stringField(section10.followup_owner_name).trim()) {
+      add('followup_owner_name', "Enter the responsible person's name");
+    }
+    const email = stringField(section10.followup_owner_email).trim();
+    if (!email) {
+      add(
+        'followup_owner_email',
+        'Enter an email for the follow-up invitation',
+      );
+    } else if (!FOLLOWUP_EMAIL_RE.test(email)) {
+      add('followup_owner_email', 'Enter a valid email address');
+    }
+    if (!isIsoDate(section10.followup_due_date)) {
+      add('followup_due_date', 'Choose when the results should be checked');
+    }
+  }
+  return issues;
+}
+
 function validateCoreSectionsPresence(report: {
   section1?: Record<string, unknown> | null;
   section2?: Record<string, unknown> | null;
@@ -280,6 +384,7 @@ function validateCoreSectionsPresence(report: {
       'Discipline contribution explanation',
     );
   }
+  issues.push(...validateRiskSafeguarding(section2));
 
   const section3 = report.section3 || {};
   if (!stringField(section3.contribution_intent_statement).trim()) {
@@ -1014,6 +1119,7 @@ export function validateReportSectionsForSubmit(report: {
       message: 'Select whether this project influenced a long-term system',
     });
   }
+  issues.push(...validateFollowUp(section10));
 
   return issues;
 }

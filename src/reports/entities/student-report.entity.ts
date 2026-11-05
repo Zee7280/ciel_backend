@@ -255,6 +255,15 @@ export class StudentReport {
     system_gaps_other?: string;
     /** Multiple custom "Other" gap texts when the student uses Add another. */
     system_gaps_other_entries?: string[];
+    /**
+     * 2.3 Risk, safeguarding & consent. Optional: reports saved before this block existed
+     * have none of these keys. Kept out of the AI payload (admin evidence & ethics review only).
+     */
+    risk_factors?: string[];
+    risk_mitigation?: string;
+    risk_consent?: string;
+    risk_safeguarding_lead?: string;
+    risk_unresolved?: string;
     media_urls?: string[];
   };
 
@@ -390,6 +399,22 @@ export class StudentReport {
     mechanisms: string[];
     scaling_potential: string;
     policy_influence: string;
+    /**
+     * 9.5 Follow-up check. All optional: reports saved before 9.5 existed have none of these keys.
+     * Records the arrangement only; kept out of every AI prompt/payload (it holds a third party's email).
+     */
+    followup_plan?: 'yes' | 'no' | 'later' | '';
+    followup_no_reason?: string;
+    followup_no_reason_other?: string;
+    followup_decision_owner?: string;
+    followup_owner_role?: string;
+    followup_owner_name?: string;
+    followup_owner_email?: string;
+    followup_interval?: string;
+    followup_custom_date?: string;
+    followup_due_date?: string;
+    followup_check?: string;
+    followup_check_notes?: string;
     media_urls?: string[];
   };
 

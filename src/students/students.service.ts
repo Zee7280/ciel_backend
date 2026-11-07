@@ -97,7 +97,10 @@ import {
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
-import type { ApplyMaintenanceState } from '../opportunities/student-apply-maintenance.util';
+import {
+  applyGateWithoutSettings,
+  type ApplyMaintenanceState,
+} from '../opportunities/student-apply-maintenance.util';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 /*
@@ -275,7 +278,7 @@ export class StudentsService {
     state: ApplyMaintenanceState | null,
   ) {
     if (!this.studentApplyMaintenance || !state) {
-      return {};
+      return applyGateWithoutSettings(opportunity);
     }
     return this.studentApplyMaintenance.decorateOpportunity(opportunity, state);
   }

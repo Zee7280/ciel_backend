@@ -1,4 +1,5 @@
 import {
+  applyGateWithoutSettings,
   CATALOG_APPLY_CLOSED_MESSAGE,
   DEFAULT_STUDENT_APPLY_MAINTENANCE_MESSAGE,
   decorateApplyGate,
@@ -167,5 +168,19 @@ describe('student apply maintenance util', () => {
     );
     expect(gate.applications_open).toBe(false);
     expect(gate.apply_blocked_reason).toBe('opportunity_hidden');
+  });
+});
+
+describe('applyGateWithoutSettings (settings lookup failed)', () => {
+  it('still closes a private team, so Apply Now is never offered', () => {
+    const gate = applyGateWithoutSettings({ team_mode: 'private_team' });
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('private_team');
+  });
+
+  it('adds nothing for open or legacy listings', () => {
+    expect(applyGateWithoutSettings({ team_mode: 'open' })).toEqual({});
+    expect(applyGateWithoutSettings({ team_mode: null })).toEqual({});
+    expect(applyGateWithoutSettings({})).toEqual({});
   });
 });

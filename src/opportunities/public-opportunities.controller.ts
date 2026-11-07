@@ -1,7 +1,10 @@
 import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { StudentApplyMaintenanceService } from './student-apply-maintenance.service';
-import type { ApplyMaintenanceState } from './student-apply-maintenance.util';
+import {
+  applyGateWithoutSettings,
+  type ApplyMaintenanceState,
+} from './student-apply-maintenance.util';
 import {
   buildPublicExploreStats,
   countBrowsePaths,
@@ -18,12 +21,12 @@ export class PublicOpportunitiesController {
   async findAll(@Query() query: any) {
     const data = await this.opportunitiesService.getPublicOpportunities(query);
     const state = await this.safeApplyState();
-    const decorated = state
-      ? data.map((item) => ({
-          ...item,
-          ...this.studentApplyMaintenance.decorateOpportunity(item, state),
-        }))
-      : data;
+    const decorated = data.map((item) => ({
+      ...item,
+      ...(state
+        ? this.studentApplyMaintenance.decorateOpportunity(item, state)
+        : applyGateWithoutSettings(item)),
+    }));
     return {
       success: true,
       apply_maintenance: state
@@ -50,12 +53,12 @@ export class PublicOpportunitiesController {
             message: state.maintenanceMessage,
           }
         : undefined,
-      data: state
-        ? {
-            ...data,
-            ...this.studentApplyMaintenance.decorateOpportunity(data, state),
-          }
-        : data,
+      data: {
+        ...data,
+        ...(state
+          ? this.studentApplyMaintenance.decorateOpportunity(data, state)
+          : applyGateWithoutSettings(data)),
+      },
     };
   }
 

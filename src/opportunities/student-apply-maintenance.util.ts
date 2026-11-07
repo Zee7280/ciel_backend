@@ -91,6 +91,30 @@ export function isStudentApplyMaintenanceSettingKey(key: string): boolean {
   );
 }
 
+/** Neutral settings, used only when the apply-settings lookup failed: no maintenance, no catalog cutoff. */
+const NEUTRAL_APPLY_STATE: ApplyMaintenanceState = {
+  maintenanceEnabled: false,
+  maintenanceMessage: '',
+  closedBefore: null,
+  expiredMessage: '',
+};
+
+/**
+ * Gate fields for when the apply-settings lookup failed. A private team (nobody applies) does not
+ * depend on any setting, so it is still flagged and the card never offers Apply Now; every other
+ * listing keeps today's behaviour (no gate fields).
+ */
+export function applyGateWithoutSettings(opportunity: {
+  createdAt?: Date | string | null;
+  admin_hidden?: boolean;
+  admin_expired?: boolean;
+  team_mode?: string | null;
+}): Partial<ApplyGateFields> {
+  return isPrivateTeamOpportunity(opportunity)
+    ? decorateApplyGate(opportunity, NEUTRAL_APPLY_STATE)
+    : {};
+}
+
 export function decorateApplyGate(
   opportunity: {
     createdAt?: Date | string | null;

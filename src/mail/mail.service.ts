@@ -723,6 +723,48 @@ export class MailService {
     }
   }
 
+  /**
+   * Sent to a partner contact after they approved, asked for changes on, or declined an opportunity
+   * from their public review link: invites them to register so they can follow it with an account.
+   */
+  async sendPartnerJoinInvite(to: string, projectTitle: string) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const registerLink = this.buildFrontendLink('/signup', {
+      role: 'ngo',
+      email: to,
+    });
+    const loginLink = this.buildFrontendLink('/login', {});
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Join CIEL PK as a Community Partner</h2>
+        <p>Thank you for reviewing this opportunity${titleEsc ? ` (<strong>${titleEsc}</strong>)` : ''}. Whether you approved it, requested changes, or declined it, we’d love to welcome your organisation to CIEL PK.</p>
+        <p>Register to build your community engagement record and keep track of the impact you’re making with students and universities.</p>
+        <div style="text-align: center; margin: 30px 0 12px 0;">
+          <a href="${registerLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Register as a Community Partner</a>
+        </div>
+        <p style="text-align: center; font-size: 13px; color: #555; margin: 0 0 24px 0;">Already registered? <a href="${loginLink}" style="color: #2563eb;">Sign in to CIEL PK</a></p>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it or contact support.</p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: 'Join CIEL PK as a Community Partner',
+        html,
+      });
+      this.logger.log(`Partner join invite email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send partner join invite email to ${to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
   async sendPartnerOpportunityNotice(
     to: string,
     projectTitle: string,
@@ -738,6 +780,12 @@ export class MailService {
       'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const dashboardLink = this.buildFrontendLink('/login', {});
+    // A partner named on a student's opportunity usually has no CIEL account yet, so the main
+    // action is registering (email pre-filled, organisation role); signing in stays one tap away.
+    const registerLink = this.buildFrontendLink('/signup', {
+      role: 'ngo',
+      email: to,
+    });
     const leadHtml = options?.leadText?.trim()
       ? `<p>${this.escHtmlPlain(options.leadText.trim())}</p>`
       : `<p>Your email address appears on the record for <strong>${titleEsc}</strong> on CIEL PK (Community Impact Education Lab).</p>`;
@@ -750,10 +798,11 @@ export class MailService {
         <h2 style="color: #333;">You are listed on a CIEL PK opportunity</h2>
         ${leadHtml}
         ${nextStepHtml}
-        <p>If you have a partner or liaison role for this activity, sign in with this email address to review details and complete any steps assigned to you.</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${dashboardLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Sign in to CIEL PK</a>
+        <p>If you have a partner or liaison role for this activity, create a CIEL PK partner account with this email address to review the details and complete any steps assigned to you.</p>
+        <div style="text-align: center; margin: 30px 0 12px 0;">
+          <a href="${registerLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Create your partner account</a>
         </div>
+        <p style="text-align: center; font-size: 13px; color: #555; margin: 0 0 24px 0;">Already registered? <a href="${dashboardLink}" style="color: #2563eb;">Sign in to CIEL PK</a></p>
         <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it or contact support.</p>
       </div>
     `;

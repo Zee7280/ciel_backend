@@ -1300,6 +1300,80 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
   });
 });
 
+describe('OpportunitiesService — inviting a reviewing partner to join CIEL PK', () => {
+  const partnerOpp = () =>
+    ({
+      id: 'opp-join-1',
+      title: 'Beach clean-up',
+      partnerToken: 'tok-join',
+      partnerVerified: false,
+      isStudentCreated: true,
+      supervision: { partner_email: 'Contact@Charity.org' },
+    }) as unknown as Opportunity;
+
+  const setup = (accounts: number, sendImpl?: jest.Mock) => {
+    const opp = partnerOpp();
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    jest
+      .spyOn(privates(service), 'notifyStudentOpportunityUpdate')
+      .mockResolvedValue(undefined);
+    const where = jest.fn().mockReturnThis();
+    const getCount = jest.fn().mockResolvedValue(accounts);
+    privates(service).usersRepository = {
+      createQueryBuilder: jest.fn(() => ({ where, getCount })),
+    } as unknown as Repository<User>;
+    const sendPartnerJoinInvite =
+      sendImpl ?? jest.fn().mockResolvedValue(undefined);
+    privates(service).mailService = {
+      sendPartnerJoinInvite,
+    } as unknown as MailService;
+    return { service, sendPartnerJoinInvite, where };
+  };
+
+  it('sends the invite after a public rejection when the partner email has no account', async () => {
+    const { service, sendPartnerJoinInvite, where } = setup(0);
+    await service.decideOpportunityViaPartnerToken('tok-join', 'reject', 'No');
+    expect(where).toHaveBeenCalledWith('LOWER(u.email) = :email', {
+      email: 'contact@charity.org',
+    });
+    expect(sendPartnerJoinInvite).toHaveBeenCalledWith(
+      'contact@charity.org',
+      'Beach clean-up',
+    );
+  });
+
+  it('does not invite a partner who already has a CIEL PK account', async () => {
+    const { service, sendPartnerJoinInvite } = setup(1);
+    await service.decideOpportunityViaPartnerToken(
+      'tok-join',
+      'revision',
+      'Fix',
+    );
+    expect(sendPartnerJoinInvite).not.toHaveBeenCalled();
+  });
+
+  it('never fails the recorded decision when the invite cannot be sent', async () => {
+    const { service } = setup(
+      0,
+      jest.fn().mockRejectedValue(new Error('smtp down')),
+    );
+    const warn = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    const result = await service.decideOpportunityViaPartnerToken(
+      'tok-join',
+      'reject',
+    );
+    expect(result.success).toBe(true);
+    warn.mockRestore();
+  });
+});
+
 describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flashcard reject/revision)', () => {
   it('rejects a student-created opportunity by token and notifies the student', async () => {
     const opp = {

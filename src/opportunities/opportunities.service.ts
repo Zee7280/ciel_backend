@@ -2586,6 +2586,32 @@ export class OpportunitiesService {
     return { partnerEmailSent: false, partnerEmail: null };
   }
 
+  /**
+   * After the partner contact acted on their public review link (approve / revision / reject),
+   * invite them to register with CIEL PK — but only when that email has no account yet.
+   * Best-effort: never affects the decision that was just recorded.
+   */
+  private async inviteReviewingPartnerToJoin(
+    opportunity: Opportunity,
+  ): Promise<void> {
+    try {
+      const email = this.resolvePartnerEmailFromOpportunity(opportunity);
+      if (!email) return;
+      const existing = await this.usersRepository
+        .createQueryBuilder('u')
+        .where('LOWER(u.email) = :email', { email: email.toLowerCase() })
+        .getCount();
+      if (existing > 0) return;
+      await this.mailService.sendPartnerJoinInvite(email, opportunity.title);
+    } catch (e) {
+      console.warn(
+        'Failed to send partner join invite after a public partner decision',
+        (e as Error).message,
+        { opportunityId: opportunity.id },
+      );
+    }
+  }
+
   private async handlePartnerApprovedSideEffects(opportunity: Opportunity) {
     const execBlocking =
       !!opportunity.execution_verification_token &&
@@ -3796,6 +3822,17 @@ export class OpportunitiesService {
           'This opportunity was permanently rejected and cannot be edited. Submit a new opportunity if needed.',
         );
       }
+    }
+
+    // On a student-created row `organizationId` points at the HOST PARTNER's (placeholder or
+    // claimed) organisation, whose members are *reviewers* (approve / reject / request revision) —
+    // never editors. Without this, any member of that org passed the org-match check below and
+    // could rewrite a student's listing, even a LIVE one, with no re-review. Only the student who
+    // created it edits (resubmit path above); CIEL PK edits through its own admin routes.
+    if (opportunity.isStudentCreated && !isStudentOwner) {
+      throw new ForbiddenException(
+        'Only the student who created this opportunity can edit it. Reviewers can approve it or request a revision instead.',
+      );
     }
 
     let orgId = organizationId;
@@ -6194,6 +6231,7 @@ export class OpportunitiesService {
           : 'Partner requested revisions on your opportunity',
       reason,
     });
+    await this.inviteReviewingPartnerToJoin(saved);
 
     return {
       success: true,
@@ -6430,6 +6468,7 @@ export class OpportunitiesService {
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
       await this.handlePartnerApprovedSideEffects(opportunity);
+      await this.inviteReviewingPartnerToJoin(opportunity);
       return {
         success: true,
         data: {
@@ -6509,6 +6548,7 @@ export class OpportunitiesService {
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
       await this.handlePartnerApprovedSideEffects(opportunity);
+      await this.inviteReviewingPartnerToJoin(opportunity);
       const nowLive = this.getApiOpportunityStatus(opportunity) === 'live';
       return {
         success: true,
@@ -7065,6 +7105,12 @@ export class OpportunitiesService {
     if (String(opp.status || '').toLowerCase() === 'draft') {
       return false;
     }
+    // A rejected / revision / closed listing is not in any reviewer's queue, even when this
+    // reviewer's own line still reads "pending" (e.g. CIEL PK rejected it first). Acting on it
+    // would resurrect a rejected row or skip the creator's required resubmit.
+    if (this.isClosedForTokenAction(opp)) {
+      return false;
+    }
     if (!opp.requiresPartnerApproval || opp.partnerVerified) {
       return false;
     }
@@ -7093,6 +7139,8 @@ export class OpportunitiesService {
 
   private isAwaitingFacultyDashboardReview(opp: Opportunity): boolean {
     if (String(opp.status || '').toLowerCase() === 'draft') return false;
+    // See isAwaitingPartnerDashboardReview: a closed stage wins over a stale "pending" faculty line.
+    if (this.isClosedForTokenAction(opp)) return false;
     if (!opp.creatorId || opp.faculty_verified || opp.admin_approved)
       return false;
     if (

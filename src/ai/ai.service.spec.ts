@@ -1,5 +1,6 @@
 import {
   AiService,
+  section2SummaryView,
   withoutFollowUpFields,
   withoutSafeguardingFields,
 } from './ai.service';
@@ -481,7 +482,7 @@ describe('AiService.generateOpportunityDraft', () => {
   });
 });
 
-describe('Section 2.3 safeguarding data never reaches an AI prompt', () => {
+describe('Section 2.3 safeguarding data and the AI prompts', () => {
   const realFetch = global.fetch;
   const realKey = process.env.OPENAI_API_KEY;
   afterEach(() => {
@@ -492,9 +493,14 @@ describe('Section 2.3 safeguarding data never reaches an AI prompt', () => {
   const section2 = {
     problem_statement: 'Children had no safe classroom lighting.',
     affected_group: 'Children aged 5-12',
-    system_gaps: ['Infrastructure'],
+    affected_count: '120',
+    system_gaps: ['Infrastructure', 'Other'],
+    system_gaps_other_entries: ['Trained electricians'],
+    baseline_evidence: ['Observation', '__o_0'],
+    baseline_other_entries: ['School maintenance log'],
     discipline: 'Engineering',
     discipline_contribution: 'We audited the wiring.',
+    summary_text: 'PREVIOUS-AI-SUMMARY',
     risk_factors: ['children_present'],
     risk_mitigation: 'SECRET-MITIGATION-TEXT',
     risk_consent: 'written',
@@ -510,19 +516,73 @@ describe('Section 2.3 safeguarding data never reaches an AI prompt', () => {
     expect(withoutSafeguardingFields(null)).toBeNull();
   });
 
-  it.each(['section2', 'section2_evaluation'])(
-    'the %s prompt contains none of the safeguarding text',
-    async (section) => {
-      process.env.OPENAI_API_KEY = 'sk-test';
-      const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
-      global.fetch = f as never;
-      await new AiService().summarize(section, section2);
-      const sent = JSON.stringify(sentBody(f).messages);
-      expect(sent).toContain('Children had no safe classroom lighting.');
-      expect(sent).not.toContain('SECRET-');
-      expect(sent).not.toContain('risk_');
-    },
-  );
+  it('section2SummaryView keeps the risk answers but replaces the named lead with a flag', () => {
+    const out = section2SummaryView(section2) as Record<string, unknown>;
+    expect(out.risk_mitigation).toBe('SECRET-MITIGATION-TEXT');
+    expect(out.risk_safeguarding_lead).toBeUndefined();
+    expect(out.risk_safeguarding_lead_recorded).toBe(true);
+    expect(out.summary_text).toBeUndefined();
+    expect(section2.risk_safeguarding_lead).toBe('SECRET-LEAD-NAME');
+    expect(
+      (
+        section2SummaryView({ risk_safeguarding_lead: '  ' }) as Record<
+          string,
+          unknown
+        >
+      ).risk_safeguarding_lead_recorded,
+    ).toBe(false);
+    expect(section2SummaryView(null)).toBeNull();
+  });
+
+  it('the section2_evaluation (scoring) prompt contains none of the safeguarding text', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section2_evaluation', section2);
+    const sent = JSON.stringify(sentBody(f).messages);
+    expect(sent).toContain('Children had no safe classroom lighting.');
+    expect(sent).not.toContain('SECRET-');
+    expect(sent).not.toContain('risk_');
+  });
+
+  it('the section2 context-summary prompt reads 2.1–2.3 in plain language but never the lead name or the old summary', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section2', section2);
+    const sent = sentBody(f)
+      .messages.map((m) => m.content)
+      .join('\n');
+    expect(sent).toContain('Children had no safe classroom lighting.');
+    expect(sent).toContain('120');
+    expect(sent).toContain('Infrastructure; Trained electricians');
+    expect(sent).toContain('Observation; School maintenance log');
+    expect(sent).toContain('children present');
+    expect(sent).toContain('SECRET-MITIGATION-TEXT');
+    expect(sent).toContain('written consent obtained');
+    expect(sent).toContain('SECRET-UNRESOLVED-TEXT');
+    expect(sent).toContain('named by the student (identity withheld');
+    expect(sent).not.toContain('SECRET-LEAD-NAME');
+    expect(sent).not.toContain('PREVIOUS-AI-SUMMARY');
+    expect(sent).not.toContain('__o_0');
+    expect(sent).toContain('100–150 words');
+  });
+
+  it('the section2 prompt marks an untouched risk block as not completed instead of inventing "no risk"', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section2', {
+      problem_statement: 'Children had no safe classroom lighting.',
+    });
+    const sent = sentBody(f)
+      .messages.map((m) => m.content)
+      .join('\n');
+    expect(sent).toContain('not completed by the student');
+    expect(sent).toContain(
+      'Intended beneficiaries (number entered by the student): [not entered]',
+    );
+  });
 });
 
 describe('Section 10 · 9.5 follow-up data never reaches an AI prompt', () => {

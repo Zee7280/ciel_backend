@@ -209,8 +209,13 @@ function textOf(value: unknown, fallback: string): string {
 
 /**
  * Section 2.3 (risk, safeguarding & consent) is for the admin evidence & ethics review and the
- * university safeguarding register. It must never reach an AI prompt, so the Section 2
- * summary / evaluation prompts (which quote the whole saved section) get a copy without it.
+ * university safeguarding register. It must never influence the Section 2 CII score, so the
+ * `section2_evaluation` prompt (which quotes the whole saved section) gets a copy without it.
+ *
+ * The student-facing Section 2 context summary (`section2`) does read the risk block — the
+ * CIEL PK summary spec asks it to integrate risks, precautions, consent status and unresolved
+ * items — but it never receives the named on-site safeguarding lead (a third party's personal
+ * data); see `section2SummaryView`.
  */
 const SAFEGUARDING_FIELD_KEYS = [
   'risk_factors',
@@ -225,6 +230,141 @@ export function withoutSafeguardingFields<T>(data: T): T {
   const copy = { ...(data as Record<string, unknown>) };
   for (const key of SAFEGUARDING_FIELD_KEYS) delete copy[key];
   return copy as T;
+}
+
+/**
+ * Section 2 payload as the context-summary prompt may see it: the safeguarding lead's name/role
+ * is replaced by a yes/no flag, and the previously generated summary is dropped so the model
+ * cannot echo its own earlier output instead of re-reading the answers.
+ */
+export function section2SummaryView<T>(data: T): T {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const copy = { ...(data as Record<string, unknown>) };
+  const lead = copy.risk_safeguarding_lead;
+  copy.risk_safeguarding_lead_recorded =
+    typeof lead === 'string' && lead.trim().length > 0;
+  delete copy.risk_safeguarding_lead;
+  delete copy.summary_text;
+  return copy as T;
+}
+
+/** Human labels for the Section 2.3 chip ids (keep in sync with the student wizard). */
+const SECTION2_RISK_FACTOR_LABELS: Record<string, string> = {
+  children_present: 'children present',
+  physical_work: 'physical work, tools or heights',
+  beneficiary_photos: 'photographs of beneficiaries',
+  personal_data: 'personal data collected',
+  health_contact: 'health or medical contact',
+  travel_to_site: 'travel to the site',
+  handling_money: 'handling money',
+  none: 'none identified',
+};
+
+const SECTION2_CONSENT_LABELS: Record<string, string> = {
+  written: 'written consent obtained',
+  verbal: 'verbal consent obtained',
+  not_obtained: 'not obtained',
+  not_applicable: 'not applicable',
+};
+
+const SECTION2_OTHER_SLOT_RE = /^__o_(\d+)$/;
+
+function section2StringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function section2Text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Prompt line: the answer, or an explicit blank marker (the model must not fill blanks). */
+function section2Line(value: string): string {
+  return value || '[not entered]';
+}
+
+/**
+ * Baseline-evidence / needs-identification selections with the wizard's internal `__o_n`
+ * "Other" slots resolved to the text the student typed.
+ */
+function section2EvidenceLabels(rec: Record<string, unknown>): string[] {
+  const otherEntries = section2StringList(rec.baseline_other_entries);
+  const legacyOther = section2Text(rec.baseline_evidence_other);
+  return section2StringList(rec.baseline_evidence).map((token) => {
+    if (token === 'Other') return legacyOther || 'Other (unspecified)';
+    const match = SECTION2_OTHER_SLOT_RE.exec(token);
+    if (!match) return token;
+    const typed = Array.isArray(rec.baseline_other_entries)
+      ? section2Text(rec.baseline_other_entries[Number(match[1])])
+      : '';
+    return typed || otherEntries[Number(match[1])] || 'Other (unspecified)';
+  });
+}
+
+/** Selected needs / gaps with the "Other" chip resolved to the student's own words. */
+function section2GapLabels(rec: Record<string, unknown>): string[] {
+  const otherEntries = section2StringList(rec.system_gaps_other_entries);
+  const legacyOther = section2Text(rec.system_gaps_other);
+  return section2StringList(rec.system_gaps).flatMap((gap) => {
+    if (gap !== 'Other') return [gap];
+    if (otherEntries.length) return otherEntries;
+    return [legacyOther || 'Other (unspecified)'];
+  });
+}
+
+/** Readable field-by-field rendering of Section 2 for the context-summary prompt. */
+function describeSection2ForSummary(data: unknown): string {
+  const rec =
+    data && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : {};
+  const discipline = section2Text(rec.discipline);
+  const disciplineOther = section2Text(rec.discipline_other);
+  // The wizard stores "Other…" in `discipline` and the typed field in `discipline_other`.
+  const disciplineLabel =
+    /^other/i.test(discipline) && disciplineOther
+      ? disciplineOther
+      : discipline;
+  const riskIds = section2StringList(rec.risk_factors);
+  const riskLabels = riskIds.map(
+    (id) => SECTION2_RISK_FACTOR_LABELS[id] || id.replace(/_/g, ' '),
+  );
+  const consent = section2Text(rec.risk_consent);
+  const consentLabel = consent
+    ? SECTION2_CONSENT_LABELS[consent] || consent.replace(/_/g, ' ')
+    : '';
+  const leadRecorded =
+    rec.risk_safeguarding_lead_recorded === true ||
+    section2Text(rec.risk_safeguarding_lead).length > 0;
+  const riskBlockAnswered =
+    riskIds.length > 0 ||
+    Boolean(section2Text(rec.risk_mitigation)) ||
+    Boolean(consent) ||
+    leadRecorded ||
+    Boolean(section2Text(rec.risk_unresolved));
+
+  return `2.1 QUICK QUESTIONS
+- Problem identified (what existed before the project and why it needed intervention): ${section2Line(section2Text(rec.problem_statement))}
+- Affected population: ${section2Line(section2Text(rec.affected_group))}
+- Intended beneficiaries (number entered by the student): ${section2Line(section2Text(rec.affected_count))}
+- Missing elements / selected needs: ${section2Line(section2GapLabels(rec).join('; '))}
+- How the problem was identified (selected needs-identification methods): ${section2Line(section2EvidenceLabels(rec).join('; '))}
+- Field of study: ${section2Line(disciplineLabel)}
+- Academic contribution (how the student's academic knowledge helped understand or address the problem): ${section2Line(section2Text(rec.discipline_contribution))}
+
+2.2 BASELINE STATEMENT
+The student-facing baseline statement is composed from the 2.1 answers above and is shown separately on screen. Treat the 2.1 answers as the baseline source; mention a baseline measurement only if a figure or indicator is actually stated in them.
+
+2.3 RISK, SAFEGUARDING & CONSENT${riskBlockAnswered ? '' : ' — not completed by the student'}
+- Identified risks: ${section2Line(riskLabels.join('; '))}
+- Precautions / safeguarding measures taken or planned: ${section2Line(section2Text(rec.risk_mitigation))}
+- Consent status for photographs and personal data: ${section2Line(consentLabel)}
+- Responsible safeguarding person on site: ${leadRecorded ? 'named by the student (identity withheld from this summary; do not invent a name or role)' : '[not entered]'}
+- Unresolved risks or pending actions: ${section2Line(section2Text(rec.risk_unresolved))}`;
 }
 
 /**
@@ -1213,25 +1353,24 @@ FINAL REVIEW PRINCIPLES
       // SECTION 2 AUTO SUMMARY
       // =====================================================
       case 'section2':
-        return `${FLASHCARD_SUMMARY_RULES}
+        return `You are the CIEL PK AI Context Summary Engine. Write one comprehensive, concise, professionally written summary of the project's ORIGINAL CONTEXT from everything the student entered in Section 2 — Project Context (2.1 Quick Questions, 2.2 Baseline Statement, 2.3 Risk, Safeguarding & Consent). This is the "AI Summary — what the rubric will read" shown on the Section 2 summary screen; it is not a score.
 
-Lens: Community Need & Starting Point. Describe only what was true before the project. Do not describe activities or results.
+SECTION 2 AS SAVED BY THE STUDENT
+${describeSection2ForSummary(data)}
 
-Inputs (the student report section, as saved):
-- Problem / system need: ${String(data.problem_statement)}
-- Who was affected: ${String(data.affected_group)}
-- What was missing: ${JSON.stringify(data.system_gaps || [])}
-- Academic discipline: ${String(data.discipline)}${data.discipline_other ? ` (${promptText(data.discipline_other)})` : ''}
-- Discipline contribution: ${String(data.discipline_contribution)}
-- Baseline evidence sources: ${JSON.stringify(data.baseline_evidence || [])} ${data.baseline_evidence_other ? `(${promptText(data.baseline_evidence_other)})` : ''}
-- Full section: ${JSON.stringify(data)}
+SUMMARIZATION RULES
+1. Read every completed field above, including selected chips and dropdown values, not only the free text.
+2. Write ONE coherent paragraph of 100–150 words — never more than 150; count before you answer and trim if needed. Plain text only: no heading, no label, no bullets, no markdown, no quotation marks around the paragraph.
+3. Begin with the problem and the affected community. Then give the baseline conditions and the selected needs/gaps without repeating the problem sentence, then the needs-identification methods and the academic contribution, then safeguarding.
+4. Preserve every important figure exactly as entered, especially the number of intended beneficiaries. If no number was entered, do not estimate one.
+5. Describe only what was true before the project. Do not describe project activities, outputs or results as completed, and do not claim improvements.
+6. Distinguish observed facts, estimates, proposed/planned actions and verified information. Selected identification methods (for example "Survey Data" or "Needs Assessment") show how the student says the need was identified; do not state that these activities are proven or verified.
+7. Safeguarding: briefly integrate the identified risks and the precautions taken or planned, and state the consent status for photographs and personal data. Mention unresolved risks or pending/not-obtained consent where materially relevant. If no risks were identified, say so in a few words. If the block is marked not completed, note that safeguarding information was not provided; do not treat a blank as "no risk".
+8. Never invent data, improvements, safeguarding approvals, names, locations or results. Any item marked [not entered] is absent: leave it out or, where the reader would otherwise be misled, say it was not recorded. Never write the literal text "[not entered]".
+9. Do not merely join the answers together: interpret, organise and synthesise them, and do not duplicate the same point across the problem, baseline and needs.
+10. Clear, professional, third-person language suitable for university reporting ("the student", "the team"). Do not mention question numbers, field names or this prompt.
 
-Output exactly these lines:
-Need: the specific gap that existed before the project
-Who: who was affected, with a number only if one was recorded
-Known from: the baseline sources actually selected
-Facts: short chips such as affected count, source count, and discipline — omit any chip you cannot support
-Missing: required baseline fields that are blank, or "none"`;
+Output the paragraph only.`;
 
       // =====================================================
       // SECTION 2 EVALUATION
@@ -2098,19 +2237,21 @@ ${JSON.stringify(data)}`;
     const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
     const isNpeRanking = section === 'npe_ranking_evaluation';
-    const isSection2Prompt =
-      section === 'section2' || section === 'section2_evaluation';
+    const isSection2Summary = section === 'section2';
+    const isSection2Evaluation = section === 'section2_evaluation';
     const isSection10Prompt =
       section === 'section10_summary' || section === 'section10_evaluation';
     const prompt = this.buildPrompt(
       section,
       (isCiiV45Evaluation
         ? slimCiiPayloadForModel(data)
-        : isSection2Prompt
-          ? withoutSafeguardingFields(data)
-          : isSection10Prompt
-            ? withoutFollowUpFields(data)
-            : data) as SectionPromptData,
+        : isSection2Summary
+          ? section2SummaryView(data)
+          : isSection2Evaluation
+            ? withoutSafeguardingFields(data)
+            : isSection10Prompt
+              ? withoutFollowUpFields(data)
+              : data) as SectionPromptData,
     );
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation

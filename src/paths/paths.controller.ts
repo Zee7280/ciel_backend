@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -409,6 +410,24 @@ export class PathsController {
       req.user.id,
       id,
       dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** Lead author removes an evidence file added by mistake (draft records only). */
+  @Delete('fyp-theses/:id/deliverables/:version')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async removeFypDeliverableById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('version', ParseIntPipe) version: number,
+  ) {
+    const data = await this.pathsService.removeFypDeliverableByIdForUser(
+      req.user.id,
+      id,
+      version,
       req.user.email,
     );
     return { success: true, data };

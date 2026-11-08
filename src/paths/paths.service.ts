@@ -2892,6 +2892,57 @@ export class PathsService implements OnModuleInit {
     });
   }
 
+  /**
+   * Remove one evidence file (by its version number) from a draft FYP record — the lead author
+   * added it by mistake. Under review / approved records keep their files: the supervisor's
+   * decision must refer to what was submitted. Versions of the remaining files are kept as they
+   * are (they are labels for history, not array indexes).
+   */
+  async removeFypDeliverableByIdForUser(
+    userId: string,
+    id: string,
+    version: number,
+    userEmail?: string,
+  ) {
+    if (!Number.isInteger(version) || version < 1) {
+      throw new BadRequestException('Unknown evidence file.');
+    }
+    return this.fypRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(FypEntry);
+      const entry = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!entry) throw new NotFoundException('FYP entry not found');
+      if (!(await this.canEditFyp(entry, userId, userEmail))) {
+        throw new NotFoundException('FYP entry not found');
+      }
+      if (entry.userId !== userId) {
+        throw new ForbiddenException(
+          'Only the lead author can remove files from this FYP record.',
+        );
+      }
+      if (entry.status === 'submitted') {
+        throw new BadRequestException(
+          'This record is with your supervisor. Files can be removed again if it is returned for revision.',
+        );
+      }
+      const before = entry.deliverables ?? [];
+      const after = before.filter((d) => Number(d.version) !== version);
+      if (after.length === before.length) {
+        throw new NotFoundException(
+          'That evidence file is no longer on this record.',
+        );
+      }
+      entry.deliverables = after;
+      const saved = await repo.save(entry);
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...saved,
+        isOwner: true,
+      });
+    });
+  }
+
   /** Emails of the university account(s) a student belongs to — the listed university
    * organisation(s) matching the student's profile or the university typed on the record, using
    * the same affiliation rule as the university dashboards. */

@@ -1763,6 +1763,89 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
     expect(list.every((e) => e.isOwner)).toBe(true);
   });
 
+  describe('removing an evidence file the lead added by mistake', () => {
+    const withFiles = () => {
+      const made = makeFypMultiRecordService();
+      const row = made.rows.find((r) => r.id === 'fyp-1')!;
+      row.deliverables = [
+        {
+          version: 1,
+          label: 'wrong.png',
+          fileUrl: 'https://s3/wrong.png',
+          uploadedAt: 'x',
+        },
+        {
+          version: 2,
+          label: 'thesis.pdf',
+          fileUrl: 'https://s3/thesis.pdf',
+          uploadedAt: 'y',
+        },
+      ];
+      return made;
+    };
+
+    it('the lead removes one file by version; the others keep their versions', async () => {
+      const { service, rows } = withFiles();
+      const saved = await service.removeFypDeliverableByIdForUser(
+        'owner-1',
+        'fyp-1',
+        1,
+        'owner@test.com',
+      );
+      expect(saved.deliverables).toEqual([
+        expect.objectContaining({ version: 2, label: 'thesis.pdf' }),
+      ]);
+      expect(
+        (rows.find((r) => r.id === 'fyp-1')!.deliverables as unknown[]).length,
+      ).toBe(1);
+    });
+
+    it('an accepted teammate may edit the draft but not remove the lead’s files', async () => {
+      const { service } = withFiles();
+      await expect(
+        service.removeFypDeliverableByIdForUser(
+          'bob-1',
+          'fyp-1',
+          1,
+          'bob@test.com',
+        ),
+      ).rejects.toThrow(/Only the lead author/);
+    });
+
+    it('a submitted record keeps its files until it is returned for revision', async () => {
+      const { service, rows } = withFiles();
+      rows.find((r) => r.id === 'fyp-1')!.status = 'submitted';
+      await expect(
+        service.removeFypDeliverableByIdForUser(
+          'owner-1',
+          'fyp-1',
+          1,
+          'owner@test.com',
+        ),
+      ).rejects.toThrow(/with your supervisor/);
+    });
+
+    it('an unknown version is a clear 404, and a stranger never learns the record exists', async () => {
+      const { service } = withFiles();
+      await expect(
+        service.removeFypDeliverableByIdForUser(
+          'owner-1',
+          'fyp-1',
+          9,
+          'owner@test.com',
+        ),
+      ).rejects.toThrow(/no longer on this record/);
+      await expect(
+        service.removeFypDeliverableByIdForUser(
+          'stranger',
+          'fyp-1',
+          1,
+          'x@test.com',
+        ),
+      ).rejects.toThrow(/FYP entry not found/);
+    });
+  });
+
   it('lets an accepted teammate patch the shared draft by id', async () => {
     const { service } = makeFypMultiRecordService();
     const saved = await service.updateFypByIdForUser(

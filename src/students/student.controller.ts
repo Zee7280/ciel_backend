@@ -245,6 +245,8 @@ export class StudentController {
       email: string;
       projectId?: string;
       blockIfOnRoster?: boolean;
+      /** Report-stage teammate add: the email must already be a CIEL account. */
+      requireRegisteredAccount?: boolean;
     },
   ) {
     if (!body.email) {
@@ -254,6 +256,7 @@ export class StudentController {
       body.email,
       body.projectId,
       body.blockIfOnRoster === true,
+      body.requireRegisteredAccount === true,
     );
   }
 

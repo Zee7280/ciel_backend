@@ -908,6 +908,7 @@ export class StudentsService {
     email: string,
     projectId?: string,
     blockIfOnRoster = false,
+    requireRegisteredAccount = false,
   ) {
     const emailNorm = String(email || '')
       .trim()
@@ -916,6 +917,21 @@ export class StudentsService {
       throw new BadRequestException('Email is required');
     }
     const projectKey = String(projectId || '').trim();
+
+    // Report-stage teammate add: the seat is listed in the teammate's own dashboard by their
+    // account, so the email must belong to a registered CIEL account before any code is sent.
+    // (Apply-stage teammates may still be invited by email and are linked when they sign up.)
+    if (requireRegisteredAccount) {
+      const account = await this.usersRepository
+        .createQueryBuilder('u')
+        .where('LOWER(TRIM(u.email)) = :emailNorm', { emailNorm })
+        .getOne();
+      if (!account) {
+        throw new BadRequestException(
+          EngagementService.teammateHasNoAccountMessage(emailNorm),
+        );
+      }
+    }
     // Only teammate-add flows opt in. Self-verify / team-lead OTP must still
     // work after the student already has a participation row.
     if (projectKey && blockIfOnRoster) {
@@ -1164,7 +1180,41 @@ export class StudentsService {
     return { success: true, message: 'Verification email sent' };
   }
 
+  /**
+   * Team seats are sometimes created before (or without) the account link: the lead typed the email,
+   * the OTP was confirmed, `student_id` stayed NULL. Every per-student listing keys on `student_id`,
+   * so claim such rows for the signed-in account first — otherwise a teammate who is already logged
+   * in never sees the project until they sign out and back in. Non-fatal: a failure here must not
+   * take the dashboard down.
+   */
+  private async claimUnlinkedSeatsForStudent(userId: string): Promise<void> {
+    if (!userId) return;
+    try {
+      if (
+        typeof this.usersRepository?.findOne !== 'function' ||
+        typeof this.engagementService?.linkOrphanParticipationsByEmail !==
+          'function'
+      ) {
+        return;
+      }
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'email'],
+      });
+      if (!user?.email) return;
+      await this.engagementService.linkOrphanParticipationsByEmail(
+        userId,
+        user.email,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not claim email-only seats for student ${userId}: ${(err as Error)?.message || err}`,
+      );
+    }
+  }
+
   async getDashboard(userId: string) {
+    await this.claimUnlinkedSeatsForStudent(userId);
     /** Matches legacy dashboard stat: enrolled / in-flight, excluding raw application `pending`. */
     const activeCourseStatStatuses = [
       'approved',
@@ -2035,6 +2085,7 @@ export class StudentsService {
   }
 
   async getStudentProjects(studentId: string) {
+    await this.claimUnlinkedSeatsForStudent(studentId);
     const applications = await this.participantRepository.find({
       where: { studentId },
       relations: ['project', 'project.organization'],
@@ -2208,6 +2259,10 @@ export class StudentsService {
     studentUserId?: string,
     viewer?: OpportunityDetailViewer,
   ) {
+    if (studentUserId) {
+      // The report gate below is keyed on the viewer's seat; claim an email-only seat first.
+      await this.claimUnlinkedSeatsForStudent(studentUserId);
+    }
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { id: opportunityId },
       relations: ['organization'],

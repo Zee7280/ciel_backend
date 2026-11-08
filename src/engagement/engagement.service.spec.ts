@@ -1613,6 +1613,151 @@ describe('EngagementService', () => {
       expect(mockManager.save).not.toHaveBeenCalled();
     });
 
+    describe('a teammate added by the lead must be a registered CIEL account', () => {
+      // The lead created this listing, so the HTTP permission gate lets them seat others.
+      const leadOwnsListing = (t: ReturnType<typeof fx>) => {
+        mockOpportunityRepository.findOne.mockResolvedValue({
+          id: t.id.project,
+          isStudentCreated: true,
+          creatorId: t.id.u1,
+        });
+        mockUserRepository.findOne.mockResolvedValue({
+          id: t.id.u1,
+          email: t.email.existing,
+        });
+      };
+      const teammateDto = (t: ReturnType<typeof fx>) =>
+        ({
+          projectId: t.id.project,
+          participationMode: 'team',
+          isTeamLead: false,
+          team_id: t.id.teamId,
+          email: t.email.newParticipant,
+          fullName: t.name.teamMember,
+          cnic: '1234567890123',
+          mobile: '03001234567',
+          universityName: 'BNU',
+        }) as RegisterParticipantDto;
+      const openOpportunity = (t: ReturnType<typeof fx>) => ({
+        id: t.id.project,
+        title: t.title,
+        status: 'active',
+        admin_approved: true,
+      });
+
+      it('refuses the seat when no CIEL account has that email (it would never reach their dashboard)', async () => {
+        const t = fx('register-no-account');
+        leadOwnsListing(t);
+        const mockManager = {
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(openOpportunity(t)) // Opportunity
+            .mockResolvedValueOnce(null), // existingByCnic
+          createQueryBuilder: jest
+            .fn()
+            .mockReturnValueOnce(mockUserQueryBuilder(null)) // no account for the email
+            .mockReturnValue(mockParticipationQueryBuilder(null)),
+          create: jest.fn().mockReturnValue({}),
+          save: jest.fn(),
+          remove: jest.fn(),
+          count: jest.fn().mockResolvedValue(0),
+        };
+        mockParticipationRepository.manager = {
+          transaction: jest
+            .fn()
+            .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+              cb(mockManager),
+            ),
+        };
+        await expect(
+          service.registerParticipant(t.id.u1, teammateDto(t), 'student'),
+        ).rejects.toThrow(/has no CIEL student account yet/);
+        expect(mockManager.save).not.toHaveBeenCalled();
+      });
+
+      it('seats a registered teammate on THEIR account, so their dashboard lists the project', async () => {
+        const t = fx('register-with-account');
+        leadOwnsListing(t);
+        const mockManager = {
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(openOpportunity(t)) // Opportunity
+            .mockResolvedValueOnce(null) // existingByCnic
+            .mockResolvedValueOnce(null) // existingByStudent
+            .mockResolvedValueOnce(null), // existingStudentSeat
+          createQueryBuilder: jest
+            .fn()
+            .mockReturnValueOnce(mockUserQueryBuilder({ id: 'acct-mate' }))
+            .mockReturnValue(mockParticipationQueryBuilder(null)),
+          create: jest.fn().mockReturnValue({}),
+          save: jest
+            .fn()
+            .mockImplementation(
+              (entity: unknown, data: Record<string, unknown>) => ({
+                id: 'seat-mate',
+                ...data,
+              }),
+            ),
+          remove: jest.fn(),
+          count: jest.fn().mockResolvedValue(0),
+        };
+        mockParticipationRepository.manager = {
+          transaction: jest
+            .fn()
+            .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+              cb(mockManager),
+            ),
+        };
+        await service.registerParticipant(t.id.u1, teammateDto(t), 'student');
+        expect(mockManager.save).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            studentId: 'acct-mate',
+            email: normalizeTestEmail(t.email.newParticipant),
+            isTeamLead: false,
+          }),
+        );
+      });
+
+      it('internal callers (no role) may still seat an email-only row that is linked at sign-up', async () => {
+        const t = fx('register-internal-email-only');
+        mockUserRepository.findOne.mockResolvedValue({
+          id: t.id.u1,
+          email: t.email.existing,
+        });
+        const mockManager = {
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(openOpportunity(t)) // Opportunity
+            .mockResolvedValueOnce(null), // existingByCnic
+          createQueryBuilder: jest
+            .fn()
+            .mockReturnValueOnce(mockUserQueryBuilder(null))
+            .mockReturnValue(mockParticipationQueryBuilder(null)),
+          create: jest.fn().mockReturnValue({}),
+          save: jest
+            .fn()
+            .mockImplementation(
+              (entity: unknown, data: Record<string, unknown>) => ({
+                id: 'seat-x',
+                ...data,
+              }),
+            ),
+          remove: jest.fn(),
+          count: jest.fn().mockResolvedValue(0),
+        };
+        mockParticipationRepository.manager = {
+          transaction: jest
+            .fn()
+            .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+              cb(mockManager),
+            ),
+        };
+        await service.registerParticipant(t.id.u1, teammateDto(t));
+        expect(mockManager.save).toHaveBeenCalled();
+      });
+    });
+
     it('reuses the existing seat when the same student registers with a different email', async () => {
       const t = fx('register-new-email');
       const studentId = t.id.u1;

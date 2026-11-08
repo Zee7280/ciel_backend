@@ -751,6 +751,65 @@ describe('StudentsService getDashboard analytics', () => {
   });
 });
 
+describe('StudentsService — a teammate seat saved by email reaches the teammate account', () => {
+  const makeListingService = () => {
+    const linkOrphanParticipationsByEmail = jest.fn().mockResolvedValue(1);
+    const participantFind = jest.fn().mockResolvedValue([]);
+    const service = makeService({
+      usersRepository: {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'student-1', email: 'Zubair@Example.com' }),
+      },
+      opportunitiesRepository: { find: jest.fn().mockResolvedValue([]) },
+      participantRepository: {
+        find: participantFind,
+        count: jest.fn().mockResolvedValue(0),
+      },
+      engagementService: { linkOrphanParticipationsByEmail },
+      opportunityApplicationsService: {
+        findNonWithdrawnApplicationsForStudent: jest.fn().mockResolvedValue([]),
+      },
+    });
+    return { service, linkOrphanParticipationsByEmail, participantFind };
+  };
+
+  it('getStudentProjects claims email-only seats for the signed-in account before listing', async () => {
+    const { service, linkOrphanParticipationsByEmail, participantFind } =
+      makeListingService();
+    await service.getStudentProjects('student-1');
+    expect(linkOrphanParticipationsByEmail).toHaveBeenCalledWith(
+      'student-1',
+      'Zubair@Example.com',
+    );
+    expect(
+      linkOrphanParticipationsByEmail.mock.invocationCallOrder[0],
+    ).toBeLessThan(participantFind.mock.invocationCallOrder[0]);
+  });
+
+  it('getDashboard claims them too (an already-signed-in teammate does not need to log out and in)', async () => {
+    const { service, linkOrphanParticipationsByEmail, participantFind } =
+      makeListingService();
+    await service.getDashboard('student-1');
+    expect(linkOrphanParticipationsByEmail).toHaveBeenCalledWith(
+      'student-1',
+      'Zubair@Example.com',
+    );
+    expect(
+      linkOrphanParticipationsByEmail.mock.invocationCallOrder[0],
+    ).toBeLessThan(participantFind.mock.invocationCallOrder[0]);
+  });
+
+  it('a failing claim never takes the listing down', async () => {
+    const { service, linkOrphanParticipationsByEmail } = makeListingService();
+    linkOrphanParticipationsByEmail.mockRejectedValue(new Error('db down'));
+    await expect(service.getStudentProjects('student-1')).resolves.toEqual({
+      success: true,
+      data: [],
+    });
+  });
+});
+
 describe('StudentsService.sendTeamMemberOtp', () => {
   const makeOtpService = (
     existingSeat: { id: string; isTeamLead: boolean } | null,
@@ -821,6 +880,63 @@ describe('StudentsService.sendTeamMemberOtp', () => {
     const result = await service.sendTeamMemberOtp('new@test.edu');
     expect(result).toEqual({ success: true, message: 'OTP sent successfully' });
     expect(sendTeamMemberOtp).not.toHaveBeenCalled();
+  });
+
+  describe('report-stage teammate add requires a registered CIEL account', () => {
+    const makeAccountService = (account: { id: string } | null) => {
+      const seatQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
+      const userQb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(account),
+      };
+      const sendTeamMemberOtp = jest.fn().mockResolvedValue(undefined);
+      const service = makeService({
+        usersRepository: {
+          createQueryBuilder: jest.fn().mockReturnValue(userQb),
+        },
+        participantRepository: {
+          find: jest.fn().mockResolvedValue([]),
+          createQueryBuilder: jest.fn().mockReturnValue(seatQb),
+        },
+        otpRepository: {
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation((row: unknown) => row),
+          save: jest.fn().mockImplementation((row: unknown) => row),
+        },
+        mailService: { sendTeamMemberOtp },
+      });
+      return { service, sendTeamMemberOtp };
+    };
+
+    it('refuses to send a code to an email with no CIEL account', async () => {
+      const { service, sendTeamMemberOtp } = makeAccountService(null);
+      await expect(
+        service.sendTeamMemberOtp('Zubair@Example.com ', 'proj-1', true, true),
+      ).rejects.toThrow(/has no CIEL student account yet/);
+      expect(sendTeamMemberOtp).not.toHaveBeenCalled();
+    });
+
+    it('sends the code when the email is a registered account', async () => {
+      const { service, sendTeamMemberOtp } = makeAccountService({
+        id: 'acct-1',
+      });
+      await expect(
+        service.sendTeamMemberOtp('zubair@example.com', 'proj-1', true, true),
+      ).resolves.toEqual({ success: true, message: 'OTP sent successfully' });
+      expect(sendTeamMemberOtp).toHaveBeenCalledTimes(1);
+    });
+
+    it('apply-stage sends (flag off) keep inviting emails without an account', async () => {
+      const { service, sendTeamMemberOtp } = makeAccountService(null);
+      await expect(
+        service.sendTeamMemberOtp('new@example.com', 'proj-1', true),
+      ).resolves.toEqual({ success: true, message: 'OTP sent successfully' });
+      expect(sendTeamMemberOtp).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('still sends OTP for self-verify when the caller is already seated', async () => {

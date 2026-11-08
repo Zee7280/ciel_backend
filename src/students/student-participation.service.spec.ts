@@ -115,6 +115,57 @@ describe('StudentParticipationService', () => {
     expect(guide.can_apply).toBe(false);
   });
 
+  it('getMyParticipation first claims an email-only seat for the signed-in account', async () => {
+    const seat = {
+      id: 'p1',
+      studentId: 'u1',
+      projectId: 'opp-1',
+      participationMode: 'team',
+      isTeamLead: false,
+      teamId: 'TM-1',
+      attendanceApproverType: 'faculty',
+      emailVerified: true,
+      status: 'approved',
+    };
+    mockParticipationRepo.findOne.mockResolvedValue(seat);
+    mockParticipationRepo.find.mockResolvedValue([seat]);
+    const update = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const repo = mockParticipationRepo as typeof mockParticipationRepo & {
+      createQueryBuilder?: jest.Mock;
+    };
+    repo.createQueryBuilder = jest.fn().mockReturnValue(update);
+    try {
+      await service.getMyParticipation('u1', 'opp-1');
+    } catch {
+      // Downstream guide / report-status details are covered elsewhere; the claim must have run.
+    } finally {
+      delete repo.createQueryBuilder;
+    }
+    expect(update.set).toHaveBeenCalledWith({ studentId: 'u1' });
+    expect(update.where).toHaveBeenCalledWith('student_id IS NULL');
+    expect(update.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('LOWER(TRIM(COALESCE(email'),
+      { emailNorm: 'a@test.com' },
+    );
+    expect(update.execute).toHaveBeenCalledTimes(1);
+    // The claim runs before the seat lookup (which reads the roster via `find`).
+    const firstSeatRead = Math.min(
+      ...[
+        ...mockParticipationRepo.find.mock.invocationCallOrder,
+        ...mockParticipationRepo.findOne.mock.invocationCallOrder,
+      ],
+    );
+    expect(update.execute.mock.invocationCallOrder[0]).toBeLessThan(
+      firstSeatRead,
+    );
+  });
+
   it('allows apply when not enrolled', async () => {
     mockParticipationRepo.findOne.mockResolvedValue(null);
     mockParticipationRepo.find.mockResolvedValue([]);

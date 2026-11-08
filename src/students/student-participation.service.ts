@@ -360,12 +360,42 @@ export class StudentParticipationService {
     );
   }
 
+  /**
+   * A teammate seat saved by email before the account link (`student_id` NULL) is claimed for the
+   * signed-in account here too, so "my participation" resolves on the first visit. Same rule as the
+   * dashboard / projects list (StudentsService) and login; non-fatal.
+   */
+  private async claimEmailOnlySeats(studentUserId: string): Promise<void> {
+    try {
+      if (typeof this.participationRepo?.createQueryBuilder !== 'function') {
+        return;
+      }
+      const user = await this.userRepo.findOne({
+        where: { id: studentUserId },
+      });
+      const emailNorm = (user?.email || '').trim().toLowerCase();
+      if (!emailNorm) return;
+      await this.participationRepo
+        .createQueryBuilder()
+        .update(Participation)
+        .set({ studentId: studentUserId })
+        .where('student_id IS NULL')
+        .andWhere("LOWER(TRIM(COALESCE(email, ''))) = :emailNorm", {
+          emailNorm,
+        })
+        .execute();
+    } catch {
+      // Listing must still work; the next dashboard load retries the claim.
+    }
+  }
+
   async getMyParticipation(studentUserId: string, projectId: string) {
     const opportunity = await this.opportunityRepo.findOne({
       where: { id: projectId },
     });
     if (!opportunity) throw new NotFoundException('Project not found');
 
+    await this.claimEmailOnlySeats(studentUserId);
     const mine = await findPreferredProjectEnrollment(
       this.participationRepo,
       studentUserId,

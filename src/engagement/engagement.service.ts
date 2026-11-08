@@ -157,6 +157,11 @@ export class EngagementService {
   /** Same window as StudentsService.TEAM_MEMBER_OTP_VALID_MS. */
   private static readonly TEAMMATE_OTP_VALID_MS = 24 * 60 * 60 * 1000;
 
+  /** Same wording on OTP send and on seat registration, so the lead reads one explanation. */
+  static teammateHasNoAccountMessage(emailNorm: string): string {
+    return `${emailNorm} has no CIEL student account yet. Only registered CIEL users can be added as teammates: ask them to sign up with this exact email (or enter the email they registered with), then add them again.`;
+  }
+
   private async assertTeammateEmailOtpVerified(
     emailNorm: string,
     projectId: string,
@@ -864,6 +869,15 @@ export class EngagementService {
           });
           const callerEmail = this.normalizeParticipantEmail(caller?.email);
           if (callerEmail !== dtoEmailNorm) {
+            // The seat must land on a real CIEL account, or the teammate never sees the project in
+            // their own dashboard (seats are listed by student_id). The UI promises "only registered
+            // CIEL users can be added"; this is what makes that true. Internal callers (no role) and
+            // admin repairs may still seat an email-only row that is linked at sign-up.
+            if (callerRole !== undefined && !targetStudentId) {
+              throw new BadRequestException(
+                EngagementService.teammateHasNoAccountMessage(dtoEmailNorm),
+              );
+            }
             await this.assertTeammateEmailOtpVerified(
               dtoEmailNorm,
               opportunity.id,

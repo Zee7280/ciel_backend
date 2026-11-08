@@ -370,8 +370,13 @@ The student-facing baseline statement is composed from the 2.1 answers above and
 /**
  * Section 10 · 9.5 "Follow-up check" only records who will check the results later. It holds a
  * third party's name and email and must not influence scoring ("Not planned" is not a failure),
- * so the Section 10 summary / evaluation prompts (which quote the whole saved section) get a
- * copy without it.
+ * so the `section10_evaluation` prompt (which quotes the whole saved section) gets a copy
+ * without it.
+ *
+ * The student-facing sustainability summary (`section10_summary`) does describe the follow-up
+ * arrangement (planned / not planned, owner role, timing, what will be checked) because the
+ * CIEL PK sustainability summary spec asks for it, but the owner's name and email never reach
+ * the model; see `section10SummaryView`.
  */
 const FOLLOWUP_FIELD_KEYS = [
   'followup_plan',
@@ -393,6 +398,164 @@ export function withoutFollowUpFields<T>(data: T): T {
   const copy = { ...(data as Record<string, unknown>) };
   for (const key of FOLLOWUP_FIELD_KEYS) delete copy[key];
   return copy as T;
+}
+
+/**
+ * Section 10 payload as the sustainability-summary prompt may see it: the follow-up owner's
+ * name and email are replaced by a yes/no flag, and the previously generated summary is
+ * dropped so the model re-reads the answers instead of echoing its own earlier output.
+ */
+export function section10SummaryView<T>(data: T): T {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const copy = { ...(data as Record<string, unknown>) };
+  const name = copy.followup_owner_name;
+  const email = copy.followup_owner_email;
+  copy.followup_owner_named =
+    (typeof name === 'string' && name.trim().length > 0) ||
+    (typeof email === 'string' && email.trim().length > 0);
+  delete copy.followup_owner_name;
+  delete copy.followup_owner_email;
+  delete copy.summary_text;
+  return copy as T;
+}
+
+const SECTION10_STATUS_LABELS: Record<string, string> = {
+  yes: 'Yes — likely to continue independently',
+  partially: 'Partial — some elements continue with support',
+  partial: 'Partial — some elements continue with support',
+  no: 'No — will not continue without further action',
+};
+
+const SECTION10_FOLLOWUP_PLAN_LABELS: Record<string, string> = {
+  yes: 'Yes — a follow-up check is planned',
+  no: 'No — no follow-up check is planned',
+  later: 'Not decided yet',
+};
+
+const SECTION10_DECISION_OWNER_LABELS: Record<string, string> = {
+  faculty: 'the assigned faculty supervisor',
+  coordinator: 'the university community engagement coordinator',
+  admin: 'CIEL PK Admin',
+};
+
+const SECTION10_INTERVAL_LABELS: Record<string, string> = {
+  '1': '1 month after project end',
+  '3': '3 months after project end',
+  '6': '6 months after project end',
+  '12': '12 months after project end',
+  custom: 'a chosen date',
+};
+
+/** Strip the wizard's leading emoji / symbol from a chip label ("🛡️ Partner-led continuation"). */
+function section10Choice(value: unknown): string {
+  return (typeof value === 'string' ? value : '')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .trim();
+}
+
+function section10IsOther(value: string): boolean {
+  return /^other\b/i.test(value);
+}
+
+/** Readable field-by-field rendering of Section 10 (UI "Section 9") for the sustainability summary. */
+function describeSection10ForSummary(data: unknown): string {
+  const rec =
+    data && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : {};
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const line = (v: string) => v || '[not entered]';
+
+  const statusRaw = text(rec.continuation_status || rec.status).toLowerCase();
+  const status =
+    SECTION10_STATUS_LABELS[statusRaw] ||
+    text(rec.continuation_status || rec.status);
+
+  const mechanismOther = text(rec.mechanism_other);
+  const mechanisms = (Array.isArray(rec.mechanisms) ? rec.mechanisms : [])
+    .map(section10Choice)
+    .filter(Boolean)
+    .map((m) =>
+      section10IsOther(m) ? mechanismOther || 'Other (unspecified)' : m,
+    );
+  const noMechanism = mechanisms.some((m) =>
+    /^no continuation mechanism/i.test(m),
+  );
+
+  const scaling = section10Choice(rec.scaling_potential || rec.scaling);
+  const policy = section10Choice(rec.policy_influence || rec.policy);
+
+  const plan = text(rec.followup_plan).toLowerCase();
+  const planLabel = plan ? SECTION10_FOLLOWUP_PLAN_LABELS[plan] || plan : '';
+  const noReasonRaw = text(rec.followup_no_reason);
+  const noReason = section10IsOther(noReasonRaw)
+    ? text(rec.followup_no_reason_other) || 'Other (unspecified)'
+    : noReasonRaw;
+  const decisionOwner = text(rec.followup_decision_owner);
+  const ownerRole = text(rec.followup_owner_role);
+  const ownerNamed =
+    rec.followup_owner_named === true ||
+    Boolean(text(rec.followup_owner_name)) ||
+    Boolean(text(rec.followup_owner_email));
+  const interval = text(rec.followup_interval);
+  const intervalLabel = interval
+    ? SECTION10_INTERVAL_LABELS[interval] || interval
+    : '';
+  const dueDate = text(rec.followup_due_date) || text(rec.followup_custom_date);
+  const check = text(rec.followup_check);
+  const checkNotes = text(rec.followup_check_notes);
+  const followupAnswered =
+    Boolean(plan) ||
+    Boolean(ownerRole) ||
+    ownerNamed ||
+    Boolean(dueDate) ||
+    Boolean(check);
+
+  const followupLines: string[] = [];
+  if (!followupAnswered) {
+    followupLines.push('- Follow-up check: not completed by the student');
+  } else {
+    followupLines.push(`- Follow-up planned? ${line(planLabel)}`);
+    if (plan === 'no') {
+      followupLines.push(`- Reason no follow-up is planned: ${line(noReason)}`);
+    } else if (plan === 'later') {
+      followupLines.push(
+        `- Who will decide later: ${line(SECTION10_DECISION_OWNER_LABELS[decisionOwner] || decisionOwner)}`,
+      );
+    } else {
+      followupLines.push(`- Responsible person's role: ${line(ownerRole)}`);
+      followupLines.push(
+        `- Responsible person: ${ownerNamed ? 'named by the student (identity withheld from this summary; refer to them by role only, never invent a name)' : '[not entered]'}`,
+      );
+      followupLines.push(
+        `- Timing: ${line(intervalLabel)}${dueDate ? ` (due ${dueDate})` : ''}`,
+      );
+      followupLines.push(
+        `- What will be checked: ${line(check)}${checkNotes ? ` — notes: ${checkNotes}` : ''}`,
+      );
+      followupLines.push(
+        '- Follow-up status: scheduled only — no follow-up visit has been recorded in this report',
+      );
+    }
+  }
+
+  return `9.1 WILL THE IMPACT CONTINUE AFTER YOU?
+- Selected classification: ${line(status)}
+
+9.2 WHAT CONTINUES, WHAT STOPS? (student's written explanation)
+- Explanation: ${line(text(rec.continuation_details || rec.explanation))}
+- What keeps it going (guided prompt): ${line(text(rec.continuation_keep_going))}
+- Risks / what could stop it (guided prompt): ${line(text(rec.continuation_risk))}
+
+9.3 WHAT KEEPS IT ALIVE? (selected continuation mechanisms)
+- Selected: ${line(mechanisms.join('; '))}${noMechanism ? '\n- Note: the student selected "No continuation mechanism"' : ''}
+
+9.4 SCALING & SYSTEM INFLUENCE
+- Scaling potential (selected): ${line(scaling)}
+- Long-term system influence (selected): ${line(policy)}
+
+9.5 FOLLOW-UP CHECK
+${followupLines.join('\n')}`;
 }
 
 /**
@@ -2010,24 +2173,26 @@ Provide a brief explanation of the score.`;
       // SECTION 10 SUMMARY
       // =====================================================
       case 'section10_summary':
-        return `${FLASHCARD_SUMMARY_RULES}
+        return `You are the CIEL PK AI Sustainability Analysis and Summarization Engine. Read everything the student entered in Section 9 — Sustainability (9.1 Will the impact continue, 9.2 What continues / what stops, 9.3 What keeps it alive, 9.4 Scaling & system influence, 9.5 Follow-up check) and write ONE professional, evidence-based sustainability summary: what is likely to remain after the project, what may stop, who will sustain the benefits, what support is still required, whether the initiative can expand, and how continued impact will be verified. This is the "AI Summary — Project Sustainability" shown on the report; it is not a score.
 
-Lens: Sustainability & Handover. A candid partial continuation with a named owner is stronger than an unsupported claim that the project continues forever.
+SECTION 9 AS SAVED BY THE STUDENT
+${describeSection10ForSummary(data)}
 
-Inputs (the student report section, as saved):
-Continuation status: ${String(data.continuation_status || data.status)}
-Continuation details: ${String(data.continuation_details || data.explanation)}
-Mechanisms: ${JSON.stringify(data.mechanisms || [])}
-Scaling potential: ${String(data.scaling_potential || data.scaling)}
-Policy influence: ${String(data.policy_influence || data.policy)}
-Full section: ${JSON.stringify(data)}
+SUMMARIZATION RULES
+1. Process every completed answer above: the selected classification, the written explanation, every selected mechanism and the conditional follow-up fields.
+2. Write ONE integrated paragraph of 120–160 words (160 is a hard maximum). To stay inside it: use at most 7 sentences, no sentence longer than 22 words, one sentence per element of the order below, no restating of the same fact in different words. Plain text only: no heading, no label, no bullets, no markdown, no quotation marks around the paragraph.
+3. Order: sustainability classification and its justification → what continues → what stops → ownership and support mechanisms (the responsible partner, institution or community owner where given) → resource, maintenance or funding still required → realistic scalability → system influence → follow-up and verification arrangement. It must read as one assessment, not answers joined together.
+4. Preserve the student's classification exactly (Yes / Partial / No). Never upgrade Partial to Yes, and never soften a No.
+5. A selected mechanism is an intended arrangement, not proof it has happened. Say "is expected to", "is planned", "according to the student" unless the explanation confirms it was done (for example a completed handover or training). Distinguish confirmed arrangements, intended actions and unverified expectations.
+6. Distinguish a completed output remaining in place (a renovated room, planted trees) from demonstrated long-term outcomes. Do not present unverified benefits as sustained results.
+7. Scaling: report the selected level as potential, not as documented expansion. Never claim institutional or policy change solely because the project succeeded; if system influence was selected without supporting explanation, say so cautiously.
+8. Follow-up: state whether a check is planned, not planned (with the stated reason) or not decided yet. Where planned, give the responsible person's role, the timing and what will be checked. A scheduled follow-up is not a completed one. If no follow-up is planned, say so plainly without inventing a monitoring arrangement.
+9. Never invent commitments, funding, ownership, partnerships, names, follow-up results or policy changes. Anything marked [not entered] is absent: leave it out or, where the reader would otherwise be misled, say it was not recorded. Never write the literal text "[not entered]".
+10. Remove duplication between the written explanation and the selected mechanisms. Keep all relevant facts, figures, timelines and named responsibilities (by role).
+11. Exclude unrelated activities, SDGs or impact statistics. Internal consistency checks and "where the report travels" information are not sustainability evidence.
+12. Clear, professional, third-person language suitable for university impact reporting ("the student", "the team", "the partner"). Do not mention question numbers, field names or this prompt. Where evidence is thin, use cautious language rather than optimistic claims.
 
-Output exactly these lines:
-Outlook: whether continuation is yes, partial, or no, in the words of the input
-Mechanisms: the named handover, partner, or follow-up mechanisms
-Scale: replication or scaling only if the input states it
-Facts: mechanism count
-Missing: outlook, mechanism, or signature when absent, or "none"`;
+Output the paragraph only.`;
 
       // =====================================================
       // SECTION 10 EVALUATION
@@ -2239,8 +2404,8 @@ ${JSON.stringify(data)}`;
     const isNpeRanking = section === 'npe_ranking_evaluation';
     const isSection2Summary = section === 'section2';
     const isSection2Evaluation = section === 'section2_evaluation';
-    const isSection10Prompt =
-      section === 'section10_summary' || section === 'section10_evaluation';
+    const isSection10Summary = section === 'section10_summary';
+    const isSection10Evaluation = section === 'section10_evaluation';
     const prompt = this.buildPrompt(
       section,
       (isCiiV45Evaluation
@@ -2249,9 +2414,11 @@ ${JSON.stringify(data)}`;
           ? section2SummaryView(data)
           : isSection2Evaluation
             ? withoutSafeguardingFields(data)
-            : isSection10Prompt
-              ? withoutFollowUpFields(data)
-              : data) as SectionPromptData,
+            : isSection10Summary
+              ? section10SummaryView(data)
+              : isSection10Evaluation
+                ? withoutFollowUpFields(data)
+                : data) as SectionPromptData,
     );
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation

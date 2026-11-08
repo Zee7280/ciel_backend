@@ -1,6 +1,7 @@
 import {
   AiService,
   section2SummaryView,
+  section10SummaryView,
   withoutFollowUpFields,
   withoutSafeguardingFields,
 } from './ai.service';
@@ -585,7 +586,7 @@ describe('Section 2.3 safeguarding data and the AI prompts', () => {
   });
 });
 
-describe('Section 10 · 9.5 follow-up data never reaches an AI prompt', () => {
+describe('Section 10 · 9.5 follow-up data and the AI prompts', () => {
   const realFetch = global.fetch;
   const realKey = process.env.OPENAI_API_KEY;
   afterEach(() => {
@@ -596,15 +597,21 @@ describe('Section 10 · 9.5 follow-up data never reaches an AI prompt', () => {
   const section10 = {
     continuation_status: 'partially',
     continuation_details: 'Weekly tutoring stops unless staff take it over.',
-    mechanisms: ['Partner-led continuation'],
+    continuation_keep_going: 'The renovated classroom stays in daily use.',
+    continuation_risk: 'Staff turnover at the school.',
+    mechanisms: ['🛡️ Partner-led continuation', 'Other'],
+    mechanism_other: 'Session plans handed to the head teacher',
     scaling_potential: 'Not scalable',
     policy_influence: 'No',
+    summary_text: 'PREVIOUS-AI-SUMMARY',
     followup_plan: 'yes',
-    followup_owner_role: 'SECRET-ROLE',
+    followup_owner_role: 'Partner / NGO representative',
     followup_owner_name: 'SECRET-NAME',
     followup_owner_email: 'secret-contact@example.org',
+    followup_interval: '3',
     followup_due_date: '2027-02-05',
-    followup_check_notes: 'SECRET-NOTES',
+    followup_check: 'Whether the reported benefits are still continuing',
+    followup_check_notes: 'Count tutoring sessions in the register',
   };
 
   it('withoutFollowUpFields drops only the followup_* answers and does not mutate the input', () => {
@@ -617,20 +624,91 @@ describe('Section 10 · 9.5 follow-up data never reaches an AI prompt', () => {
     expect(withoutFollowUpFields(undefined)).toBeUndefined();
   });
 
-  it.each(['section10_summary', 'section10_evaluation'])(
-    'the %s prompt contains none of the follow-up data',
-    async (section) => {
-      process.env.OPENAI_API_KEY = 'sk-test';
-      const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
-      global.fetch = f as never;
-      await new AiService().summarize(section, section10);
-      const sent = JSON.stringify(sentBody(f).messages);
-      expect(sent).toContain(
-        'Weekly tutoring stops unless staff take it over.',
-      );
-      expect(sent).not.toContain('SECRET-');
-      expect(sent).not.toContain('secret-contact');
-      expect(sent).not.toContain('followup_');
-    },
-  );
+  it('section10SummaryView keeps the follow-up plan but replaces the owner name/email with a flag', () => {
+    const out = section10SummaryView(section10) as Record<string, unknown>;
+    expect(out.followup_owner_role).toBe('Partner / NGO representative');
+    expect(out.followup_due_date).toBe('2027-02-05');
+    expect(out.followup_owner_name).toBeUndefined();
+    expect(out.followup_owner_email).toBeUndefined();
+    expect(out.followup_owner_named).toBe(true);
+    expect(out.summary_text).toBeUndefined();
+    expect(section10.followup_owner_name).toBe('SECRET-NAME');
+    expect(
+      (
+        section10SummaryView({ followup_plan: 'yes' }) as Record<
+          string,
+          unknown
+        >
+      ).followup_owner_named,
+    ).toBe(false);
+    expect(section10SummaryView(undefined)).toBeUndefined();
+  });
+
+  it('the section10_evaluation (scoring) prompt contains none of the follow-up data', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section10_evaluation', section10);
+    const sent = JSON.stringify(sentBody(f).messages);
+    expect(sent).toContain('Weekly tutoring stops unless staff take it over.');
+    expect(sent).not.toContain('SECRET-');
+    expect(sent).not.toContain('secret-contact');
+    expect(sent).not.toContain('followup_');
+  });
+
+  it('the section10_summary prompt reads 9.1–9.5 in plain language but never the owner name/email or the old summary', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section10_summary', section10);
+    const sent = sentBody(f)
+      .messages.map((m) => m.content)
+      .join('\n');
+    expect(sent).toContain('Partial — some elements continue with support');
+    expect(sent).toContain('Weekly tutoring stops unless staff take it over.');
+    expect(sent).toContain('The renovated classroom stays in daily use.');
+    expect(sent).toContain('Staff turnover at the school.');
+    expect(sent).toContain(
+      'Partner-led continuation; Session plans handed to the head teacher',
+    );
+    expect(sent).not.toContain('🛡️');
+    expect(sent).toContain('Yes — a follow-up check is planned');
+    expect(sent).toContain(
+      "Responsible person's role: Partner / NGO representative",
+    );
+    expect(sent).toContain('3 months after project end (due 2027-02-05)');
+    expect(sent).toContain('Count tutoring sessions in the register');
+    expect(sent).toContain('named by the student (identity withheld');
+    expect(sent).not.toContain('SECRET-NAME');
+    expect(sent).not.toContain('secret-contact');
+    expect(sent).not.toContain('PREVIOUS-AI-SUMMARY');
+    expect(sent).toContain('120–160 words');
+  });
+
+  it('the section10_summary prompt reports "no follow-up" with its reason, and an untouched block as not completed', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    const svc = new AiService();
+    await svc.summarize('section10_summary', {
+      continuation_status: 'no',
+      followup_plan: 'no',
+      followup_no_reason: 'Other',
+      followup_no_reason_other: 'Partner closes in December',
+    });
+    const first = sentBody(f, 0)
+      .messages.map((m) => m.content)
+      .join('\n');
+    expect(first).toContain('No — will not continue without further action');
+    expect(first).toContain('No — no follow-up check is planned');
+    expect(first).toContain(
+      'Reason no follow-up is planned: Partner closes in December',
+    );
+    await svc.summarize('section10_summary', { continuation_status: 'yes' });
+    const second = sentBody(f, 1)
+      .messages.map((m) => m.content)
+      .join('\n');
+    expect(second).toContain('Follow-up check: not completed by the student');
+    expect(second).toContain('Selected: [not entered]');
+  });
 });

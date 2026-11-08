@@ -2421,12 +2421,56 @@ describe('EngagementService', () => {
       ).rejects.toThrow(/not approved/);
     });
 
-    it('a plain member cannot register ANOTHER student via a client-supplied studentId', async () => {
+    it("a member of someone else's team cannot register ANOTHER student via a client-supplied studentId", async () => {
       mockParticipationRepository.findOne.mockResolvedValue({
         id: 'p1',
         studentId: 'u1',
         status: 'approved',
         isTeamLead: false,
+        teamId: 'TM-OTHER',
+      });
+      await expect(
+        service.registerParticipant(
+          'u1',
+          dto({ studentId: 'victim' }),
+          'student',
+        ),
+      ).rejects.toThrow(/only register your own/);
+    });
+
+    it('a free seat holder (active seat, no team yet) may seat a teammate — they are forming a team', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        studentId: 'u1',
+        status: 'approved',
+        isTeamLead: false,
+        teamId: null,
+      });
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockRejectedValue(new Error('reached-transaction')),
+      };
+      await expect(
+        service.registerParticipant(
+          'u1',
+          dto({
+            participationMode: 'team',
+            isTeamLead: false,
+            email: 'mate@b.com',
+          }),
+          'student',
+        ),
+      ).rejects.toThrow('reached-transaction');
+    });
+
+    it('a pending / rejected seat holder still cannot seat others', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        studentId: 'u1',
+        status: 'pending',
+        isTeamLead: false,
+        teamId: null,
       });
       await expect(
         service.registerParticipant(

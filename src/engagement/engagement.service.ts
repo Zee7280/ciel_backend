@@ -445,7 +445,18 @@ export class EngagementService {
         'Apply to this project and wait for approval before registering your participation.',
       );
     }
-    const mayRegisterOthers = mine?.isTeamLead === true || !!approvedApp;
+    // Who may seat a teammate: the lead of an existing team, an approved applicant, or a FREE seat
+    // holder (active seat, not yet on anyone's team) who is forming one — the same people
+    // `formTeamFromLead` lets form a team. A plain member of someone else's team may not. The
+    // teammate still has to confirm the OTP sent to their own email, so nobody is seated unasked.
+    const mineIsActive =
+      !!mine &&
+      ['approved', 'verified', 'paid', 'accepted', 'finalized'].includes(
+        String(mine.status || '').toLowerCase(),
+      );
+    const mineIsFreeSeat = mineIsActive && !(mine.teamId || '').trim();
+    const mayRegisterOthers =
+      mine?.isTeamLead === true || !!approvedApp || mineIsFreeSeat;
     if (dto.studentId && dto.studentId !== callerId && !mayRegisterOthers) {
       throw new ForbiddenException(
         'You can only register your own participation.',

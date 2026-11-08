@@ -4554,9 +4554,20 @@ export class StudentReportsService {
     for (const row of reports) {
       const st = String(row.status || '').toLowerCase();
       counts.all += 1;
-      if (st === 'verified' || st === 'paid') counts.verified += 1;
-      else if (revisionStatuses.has(st)) counts.revision += 1;
-      else if (!notYetSubmitted.has(st) && row.admin_status === 'pending') {
+      // A retracted (closed) report keeps admin_status=approved on record but is no longer
+      // published: it is history, not "verified" and not waiting for anyone.
+      if (st === 'closed') continue;
+      // Same classification the admin list applies client-side (isReportReturnedForRevision):
+      // a legacy row can still read status=submitted while admin/partner already sent it back.
+      if (revisionStatuses.has(st) || this.isReportRejectedForRevision(row)) {
+        counts.revision += 1;
+      } else if (
+        st === 'verified' ||
+        st === 'paid' ||
+        row.admin_status === 'approved'
+      ) {
+        counts.verified += 1;
+      } else if (!notYetSubmitted.has(st)) {
         counts.needsReview += 1;
       }
     }
@@ -5750,6 +5761,14 @@ export class StudentReportsService {
     ) {
       throw new BadRequestException(
         'This report has not been submitted yet and cannot be approved.',
+      );
+    }
+    // A closed report was deliberately pulled from published results; a stray click on Approve must
+    // not silently republish it (and leave it "verified" with a close stamp still on it). Reopen it
+    // first (unlock / send back), let the student resubmit, then approve.
+    if (action === 'approve' && currentStatusKey === 'closed') {
+      throw new BadRequestException(
+        'This report was closed. Reopen it (unlock or send back for changes) and wait for the student to resubmit before approving it again.',
       );
     }
     // A report that was sent back stays unpublishable until the student resubmits it — otherwise a

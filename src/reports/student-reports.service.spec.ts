@@ -3206,6 +3206,42 @@ describe('StudentReportsService', () => {
     expect((filtered as ListingWithMeta).meta.counts.all).toBe(1);
   });
 
+  it('queue counts: a closed report is history, a legacy sent-back row is revision, a fee-held row still needs review', async () => {
+    const mk = (id: string, status: string, admin_status: string) => ({
+      id,
+      studentId: `s-${id}`,
+      opportunityId: 'plain',
+      project_id: 'plain',
+      status,
+      partner_status: 'pending',
+      faculty_status: 'pending',
+      admin_status,
+      submission_date: new Date(),
+      reportSubmittedAt: new Date(),
+      createdAt: new Date(),
+      student: { name: id, email: `${id}@t.com` },
+      opportunity: {
+        title: 'T',
+        organizationId: 'org-1',
+        organization: { name: 'Org' },
+      },
+      section11: null,
+    });
+    mockStudentReportsRepository.find.mockResolvedValue([
+      mk('closed', 'closed', 'approved'),
+      mk('legacy-back', 'submitted', 'rejected'),
+      mk('fee', 'payment_pending', 'pending'),
+      mk('live', 'verified', 'approved'),
+    ]);
+    const res = await service.findAll({ page: 1, limit: 50 });
+    expect((res as ListingWithMeta).meta.counts).toEqual({
+      needsReview: 1,
+      verified: 1,
+      revision: 1,
+      all: 4,
+    });
+  });
+
   it('admin findAll returns one report per team when multiple teams share a project', async () => {
     const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
     const teamOneLeadReport = {
@@ -4346,4 +4382,260 @@ describe('StudentReportsService', () => {
       );
     });
   });
+
+  /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- the in-memory row stands in for a DB row */
+  describe('report lifecycle — one report through submit, review, revision, publish', () => {
+    type Row = Record<string, any>;
+    let row: Row;
+
+    /** Makes every repository lookup return the single in-memory row (a stand-in for the DB). */
+    const bindRow = () => {
+      mockStudentReportsRepository.findOne.mockImplementation(() =>
+        Promise.resolve(row),
+      );
+      mockStudentReportsRepository.find.mockImplementation(() =>
+        Promise.resolve(row ? [row] : []),
+      );
+    };
+
+    const submit = (extra: Record<string, unknown> = {}) =>
+      service.createReport(
+        'student-1',
+        { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS, ...extra },
+        [],
+        true,
+      );
+
+    beforeEach(async () => {
+      mockStudentReportsRepository.save.mockImplementation((r: Row) => {
+        if (!r.id) r.id = 'report-1';
+        row = r;
+        return Promise.resolve(r);
+      });
+      row = undefined as unknown as Row;
+      await submit();
+      // The real table fills these via column defaults; the in-memory row has none.
+      row.admin_status ??= 'pending';
+      row.partner_status ??= 'pending';
+      row.faculty_status ??= 'pending';
+      mockUsersRepository.findOne.mockResolvedValue({
+        id: 'student-1',
+        name: 'Test Student',
+        email: 'student@uni.edu.pk',
+      });
+      bindRow();
+    });
+
+    it('a fresh submit lands in review, not approved', () => {
+      expect(row.status).toBe('submitted');
+      expect(row.admin_status).toBe('pending');
+      expect(row.reportSubmittedAt).toBeInstanceOf(Date);
+      expect(row.adminApprovedAt ?? null).toBeNull();
+    });
+
+    it('a double-click submit is harmless and does not overwrite the reviewed content', async () => {
+      const stamp = row.reportSubmittedAt;
+      const result = await submit({
+        section2: {
+          ...MIN_VALID_SUBMIT_SECTIONS.section2,
+          problem_statement: 'CHANGED',
+        },
+      });
+      expect((result.data as SubmitResultData).already_submitted).toBe(true);
+      expect(row.reportSubmittedAt).toBe(stamp);
+      expect(row.section2.problem_statement).not.toBe('CHANGED');
+      expect(row.status).toBe('submitted');
+    });
+
+    it('admin cannot publish before the CII analysis is locked', async () => {
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/CII analysis/);
+      expect(row.status).toBe('submitted');
+      expect(row.admin_status).toBe('pending');
+    });
+
+    it('admin cannot publish a report the student has not submitted', async () => {
+      row.status = 'draft';
+      row.reportSubmittedAt = null;
+      row.ciiV45Lock = { locked: true };
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/not been submitted/);
+    });
+
+    it('sending back needs a reason, then publish is blocked until the student resubmits', async () => {
+      row.ciiV45Lock = { locked: true };
+      await expect(
+        service.verifyReport('report-1', 'reject', 'admin', '  '),
+      ).rejects.toThrow(/feedback or reason/);
+      expect(row.status).toBe('submitted');
+
+      await service.verifyReport(
+        'report-1',
+        'reject',
+        'admin',
+        'Add the signed sheet',
+      );
+      expect(row.status).toBe('revision');
+      expect(row.admin_status).toBe('rejected');
+      expect(row.admin_feedback).toBe('Add the signed sheet');
+      expect(row.ciiV45Lock ?? null).toBeNull();
+      await new Promise((r) => setImmediate(r)); // the student mail is fire-and-forget
+      expect(
+        mockMailService.sendStudentReportAdminDecision,
+      ).toHaveBeenCalledTimes(1);
+
+      row.ciiV45Lock = { locked: true };
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/sent back for revision/);
+      expect(row.status).toBe('revision');
+    });
+
+    it('revision → resubmit clears the old rejection and returns the report to review', async () => {
+      await service.verifyReport(
+        'report-1',
+        'reject',
+        'admin',
+        'Fix section 5',
+      );
+      const result = await submit({
+        section5: {
+          ...MIN_VALID_SUBMIT_SECTIONS.section5,
+          challenges:
+            MIN_VALID_SUBMIT_SECTIONS.section5.challenges + ' Updated.',
+        },
+      });
+      expect((result.data as SubmitResultData).already_submitted).toBeFalsy();
+      expect(row.status).toBe('submitted');
+      expect(row.admin_status).toBe('pending');
+      expect(row.admin_feedback).toBe('');
+      expect(row.adminApprovedAt ?? null).toBeNull();
+      expect(row.section5.challenges).toMatch(/Updated\.$/);
+    });
+
+    it('full path: submit → CII lock → publish → idempotent re-publish → student locked out', async () => {
+      row.ciiV45Lock = { locked: true };
+      await service.verifyReport(
+        'report-1',
+        'approve',
+        'admin',
+        undefined,
+        undefined,
+        undefined,
+        { id: 'admin-1', name: 'Admin' },
+      );
+      expect(row.status).toBe('verified');
+      expect(row.admin_status).toBe('approved');
+      expect(row.faculty_status).toBe('approved');
+      expect(row.adminApprovedAt).toBeInstanceOf(Date);
+      expect(row.review_package).toBeDefined();
+      const publishedAt = row.adminApprovedAt;
+
+      // second click on Approve: no new timestamp, no second publish email
+      await service.verifyReport('report-1', 'approve', 'admin');
+      expect(row.adminApprovedAt).toBe(publishedAt);
+      await new Promise((r) => setImmediate(r));
+      const publishMails =
+        mockMailService.sendReportPackagePublished.mock.calls.length;
+      await service.verifyReport('report-1', 'approve', 'admin');
+      await new Promise((r) => setImmediate(r));
+      expect(mockMailService.sendReportPackagePublished.mock.calls.length).toBe(
+        publishMails,
+      );
+
+      await expect(submit()).rejects.toThrow(/already been verified/);
+      expect(row.status).toBe('verified');
+    });
+
+    it('re-sending a published report needs force, and then wipes the score and badges', async () => {
+      row.ciiV45Lock = { locked: true };
+      row.ciiV45 = { finalCII: 80 };
+      row.awardBadges = [{ name: 'Gold' }];
+      await service.verifyReport('report-1', 'approve', 'admin');
+      await expect(
+        service.verifyReport('report-1', 'reject', 'admin', 'Oops'),
+      ).rejects.toThrow(/force=true/);
+      expect(row.status).toBe('verified');
+
+      await service.verifyReport(
+        'report-1',
+        'reject',
+        'admin',
+        'Oops',
+        undefined,
+        true,
+      );
+      expect(row.status).toBe('revision');
+      expect(row.admin_status).toBe('rejected');
+      expect(row.adminApprovedAt ?? null).toBeNull();
+      expect(row.ciiV45Lock ?? null).toBeNull();
+      expect(row.awardBadges).toEqual([]);
+    });
+
+    it('unlock turns it back into an editable draft that can be submitted again', async () => {
+      row.ciiV45Lock = { locked: true };
+      await service.verifyReport('report-1', 'approve', 'admin');
+      await service.verifyReport(
+        'report-1',
+        'unlock',
+        'admin',
+        'Re-do',
+        undefined,
+        true,
+      );
+      expect(row.status).toBe('draft');
+      expect(row.admin_status).toBe('pending');
+      expect(row.reportSubmittedAt ?? null).toBeNull();
+
+      await submit();
+      expect(row.status).toBe('submitted');
+      expect(row.admin_status).toBe('pending');
+    });
+
+    it('close needs a reason and only applies to a published report', async () => {
+      await expect(
+        service.verifyReport('report-1', 'close', 'admin', 'dup'),
+      ).rejects.toThrow(/already-approved/);
+      row.ciiV45Lock = { locked: true };
+      await service.verifyReport('report-1', 'approve', 'admin');
+      await expect(
+        service.verifyReport('report-1', 'close', 'admin', ' '),
+      ).rejects.toThrow(/reason is required/);
+      await service.verifyReport('report-1', 'close', 'admin', 'Duplicate');
+      expect(row.status).toBe('closed');
+    });
+
+    it('a closed report cannot be re-published or edited by the student', async () => {
+      row.ciiV45Lock = { locked: true };
+      await service.verifyReport('report-1', 'approve', 'admin');
+      await service.verifyReport('report-1', 'close', 'admin', 'Duplicate');
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/was closed/);
+      expect(row.status).toBe('closed');
+      const again = await submit();
+      expect((again.data as SubmitResultData).already_submitted).toBe(true);
+      expect(row.status).toBe('closed');
+    });
+
+    it('partner / NGO can never approve a report', async () => {
+      row.ciiV45Lock = { locked: true };
+      await expect(
+        service.verifyReport('report-1', 'approve', 'partner'),
+      ).rejects.toThrow(/CIEL PK Admin only/);
+      expect(row.status).toBe('submitted');
+    });
+
+    it('a stale second reviewer is refused instead of overwriting the first decision', async () => {
+      row.ciiV45Lock = { locked: true };
+      verifyReportQb.__nextAffected = 0;
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/just updated by another reviewer/);
+      verifyReportQb.__nextAffected = undefined;
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 });

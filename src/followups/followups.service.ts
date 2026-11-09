@@ -44,6 +44,7 @@ import {
   followUpIntro,
   followUpSubject,
   generateFollowUpQuestions,
+  normalizeIsoDate,
   hashFollowUpToken,
   karachiToday,
   MAX_FOLLOWUP_QUESTIONS,
@@ -57,6 +58,7 @@ import type {
   AdminActivateFollowUpDto,
   AdminFollowUpListQueryDto,
   AdminFollowUpQuestionsDto,
+  FollowUpPreviewDto,
   SubmitFollowUpResponseDto,
 } from './dto/follow-up.dto';
 
@@ -1627,6 +1629,47 @@ export class FollowUpsService {
         );
     }
     return this.getForAdmin(reportId);
+  }
+
+  // ---------------------------------------------------------------- student preview (9.5)
+
+  /**
+   * What the student sees on 9.5 as soon as they pick "Yes": the schedule and the draft questions
+   * built from the answers currently on screen. Nothing is stored or sent; CIEL PK may still edit
+   * the questions after publication.
+   */
+  previewForStudent(dto: FollowUpPreviewDto) {
+    const s10 = (dto.section10 || {}) as Rec;
+    const projectEndDate = normalizeIsoDate(dto.projectEndDate);
+    const dueDate = resolveFollowUpDueDate(s10, projectEndDate);
+    const { reminder1Days, reminder2Days } = this.reminderDays();
+    const questions = generateFollowUpQuestions({
+      section4: dto.section4 || {},
+      section5: dto.section5 || {},
+      section10: s10,
+    });
+    const intervalLabel = followUpIntervalLabel(s10);
+    return {
+      dueDate,
+      reminder1: dueDate ? addDaysIso(dueDate, reminder1Days) : '',
+      reminder2: dueDate ? addDaysIso(dueDate, reminder2Days) : '',
+      linkValidDays: this.tokenTtlDays(),
+      intervalLabel,
+      subject: followUpSubject(
+        'initial',
+        'PROJECT-ID',
+        str(dto.projectTitle) || 'your project',
+      ),
+      intro: followUpIntro('initial', intervalLabel),
+      questions: questions.map((q, i) => ({
+        order: i + 1,
+        activityTitle: q.activityTitle,
+        questionText: q.questionText,
+        countLabel: q.countLabel,
+        reason: q.reason,
+      })),
+      aiEnabled: this.aiQuestionsEnabled(),
+    };
   }
 
   // ---------------------------------------------------------------- student

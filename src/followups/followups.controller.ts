@@ -37,6 +37,7 @@ import {
   AdminFollowUpListQueryDto,
   AdminFollowUpQuestionsDto,
   DeclineFollowUpDto,
+  FollowUpPreviewDto,
   SubmitFollowUpResponseDto,
 } from './dto/follow-up.dto';
 
@@ -187,6 +188,20 @@ export class MailWebhookController {
       throw new UnauthorizedException('Invalid webhook credentials.');
     }
     return this.followUps.recordMailEvents(normalizeMailWebhookEvents(body));
+  }
+}
+
+/** Student, while filling 9.5: stateless preview of the schedule and draft questions. */
+@Controller('students/followups')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
+export class StudentFollowUpPreviewController {
+  constructor(private readonly followUps: FollowUpsService) {}
+
+  @Post('preview')
+  @HttpCode(200)
+  preview(@Body() body: FollowUpPreviewDto) {
+    return this.followUps.previewForStudent(body);
   }
 }
 

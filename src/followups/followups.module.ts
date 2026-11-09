@@ -16,6 +16,7 @@ import {
   AdminFollowUpTrackerController,
   MailWebhookController,
   PublicFollowUpsController,
+  StudentFollowUpPreviewController,
   StudentFollowUpsController,
 } from './followups.controller';
 
@@ -42,6 +43,7 @@ import {
     AdminFollowUpsController,
     AdminFollowUpTrackerController,
     StudentFollowUpsController,
+    StudentFollowUpPreviewController,
     PublicFollowUpsController,
     MailWebhookController,
   ],

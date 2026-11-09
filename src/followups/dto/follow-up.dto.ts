@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsIn,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -98,6 +99,35 @@ export class AdminActivateFollowUpDto {
   @IsString()
   @MaxLength(10)
   dueDate?: string;
+}
+
+/**
+ * Body of POST /students/followups/preview: the wizard's current (possibly unsaved) Section 4 / 5
+ * / 10 answers, so the student sees on 9.5 what the partner will be asked and when. Stateless.
+ */
+export class FollowUpPreviewDto {
+  @IsOptional()
+  @IsObject()
+  section4?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsObject()
+  section5?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsObject()
+  section10?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  projectTitle?: string;
+
+  /** yyyy-mm-dd from the opportunity, as the wizard reads it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  projectEndDate?: string;
 }
 
 export class AdminFollowUpListQueryDto {

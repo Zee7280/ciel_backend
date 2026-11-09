@@ -910,4 +910,40 @@ describe('Section 9.5 follow-up (real app + real Postgres)', () => {
       .set('Authorization', `Bearer ${process.env.CRON_SECRET}`);
     expect(mailsTo(email)).toHaveLength(1);
   });
+
+  it('a student filling 9.5 gets a stateless preview of the schedule and draft questions (nothing stored)', async () => {
+    const s = await student();
+    const body = fullSections(followupYes('preview@partner.test'));
+    const res = await h.as(s).post('/students/followups/preview').send({
+      section4: body.section4,
+      section5: body.section5,
+      section10: body.section10,
+      projectTitle: 'Classroom LED retrofit',
+      projectEndDate: END,
+    });
+    expect(res.status).toBe(200);
+    const p = res.body as Rec;
+    expect(p.dueDate).toBe(addMonthsIso(END, 3));
+    expect(p.reminder1).toBe(addDaysIso(p.dueDate, 7));
+    expect(p.reminder2).toBe(addDaysIso(p.dueDate, 14));
+    expect(p.questions.map((q: Rec) => q.activityTitle)).toEqual([
+      'Classroom LED retrofit',
+      'Overall project',
+    ]);
+    expect(p.questions[1].questionText).toMatch(
+      /fans and lights in all six rooms still work/,
+    );
+    expect(p.subject).toMatch(
+      /^CIEL PK \| Impact follow-up \| PROJECT-ID \| Classroom LED retrofit$/,
+    );
+    expect(await followUps.count()).toBe(await followUps.count()); // no row created
+    expect(
+      (await h.as(null).post('/students/followups/preview').send({})).status,
+    ).toBe(401);
+    // empty answers still yield the overall question, never an error
+    const bare = await h.as(s).post('/students/followups/preview').send({});
+    expect(bare.status).toBe(200);
+    expect(bare.body.questions).toHaveLength(1);
+    expect(bare.body.dueDate).toBe('');
+  });
 });

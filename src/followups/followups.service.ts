@@ -1714,6 +1714,7 @@ export class FollowUpsService {
       intro: followUpIntro('initial', intervalLabel),
       questions: questions.map((q, i) => ({
         order: i + 1,
+        activityId: q.activityId,
         activityTitle: q.activityTitle,
         questionText: q.questionText,
         countLabel: q.countLabel,

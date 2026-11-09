@@ -391,6 +391,7 @@ const FOLLOWUP_FIELD_KEYS = [
   'followup_due_date',
   'followup_check',
   'followup_check_notes',
+  'followup_questions',
 ] as const;
 
 export function withoutFollowUpFields<T>(data: T): T {
@@ -415,6 +416,7 @@ export function section10SummaryView<T>(data: T): T {
     (typeof email === 'string' && email.trim().length > 0);
   delete copy.followup_owner_name;
   delete copy.followup_owner_email;
+  delete copy.followup_questions;
   delete copy.summary_text;
   return copy as T;
 }

@@ -256,6 +256,24 @@ export function validateFollowUp(
     if (!isIsoDate(section10.followup_due_date)) {
       add('followup_due_date', 'Choose when the results should be checked');
     }
+    // Optional reviewed question set: every kept question needs real text (an empty set simply
+    // means "use the suggested questions").
+    const questions = Array.isArray(section10.followup_questions)
+      ? (section10.followup_questions as unknown[])
+      : [];
+    questions.forEach((item, index) => {
+      const q = (item && typeof item === 'object' ? item : {}) as Record<
+        string,
+        unknown
+      >;
+      if (q.include === false) return;
+      if (stringField(q.questionText).trim().length < 5) {
+        add(
+          `followup_questions.${index}.questionText`,
+          'Write the follow-up question in a few words, or untick it',
+        );
+      }
+    });
   }
   return issues;
 }

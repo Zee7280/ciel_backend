@@ -416,6 +416,19 @@ export class StudentReport {
     followup_due_date?: string;
     followup_check?: string;
     followup_check_notes?: string;
+    /**
+     * Questions the student reviewed / edited on 9.5 (optional). When present and at least one is
+     * included, these replace the generated set at activation; CIEL PK may still refine them.
+     */
+    followup_questions?: Array<{
+      id?: string;
+      activityId?: string | null;
+      activityTitle?: string;
+      questionText?: string;
+      countLabel?: string | null;
+      include?: boolean;
+      source?: 'suggested' | 'student';
+    }>;
     media_urls?: string[];
   };
 

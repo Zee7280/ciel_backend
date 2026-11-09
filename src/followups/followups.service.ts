@@ -21,7 +21,10 @@ import {
   ReportFollowUp,
   type FollowUpStatus,
 } from './entities/report-follow-up.entity';
-import { FollowUpQuestion } from './entities/follow-up-question.entity';
+import {
+  FollowUpQuestion,
+  type FollowUpQuestionOrigin,
+} from './entities/follow-up-question.entity';
 import {
   FollowUpDispatch,
   type FollowUpDispatchKind,
@@ -426,9 +429,14 @@ export class FollowUpsService {
     report: StudentReport,
     fu: ReportFollowUp,
   ): Promise<
-    Array<GeneratedFollowUpQuestion & { generatedBy: 'rules' | 'ai' }>
+    Array<
+      GeneratedFollowUpQuestion & { generatedBy: 'rules' | 'ai' | 'student' }
+    >
   > {
     const data = report as unknown as Rec;
+    // The student may have reviewed / edited the questions on 9.5; an included set wins.
+    const studentSet = this.studentQuestions(data);
+    if (studentSet.length) return studentSet;
     if (this.aiQuestionsEnabled() && this.aiService) {
       try {
         const s4 = (data.section4 || {}) as Rec;
@@ -469,10 +477,53 @@ export class FollowUpsService {
     }));
   }
 
+  /** Questions the student kept / wrote on 9.5 (included, non-empty), in their order, max 10. */
+  private studentQuestions(
+    data: Rec,
+  ): Array<GeneratedFollowUpQuestion & { generatedBy: 'student' }> {
+    const s10 = (data.section10 || {}) as Rec;
+    const raw = Array.isArray(s10.followup_questions)
+      ? (s10.followup_questions as unknown[])
+      : [];
+    const s4 = (data.section4 || {}) as Rec;
+    const blocks = Array.isArray(s4.activity_blocks)
+      ? (s4.activity_blocks as unknown[])
+      : [];
+    const knownIds = new Set(
+      blocks.map((b, i) => str((b as Rec)?.id) || `activity-${i + 1}`),
+    );
+    const out: Array<GeneratedFollowUpQuestion & { generatedBy: 'student' }> =
+      [];
+    for (const item of raw) {
+      const q = (item && typeof item === 'object' ? item : {}) as Rec;
+      if (q.include === false) continue;
+      const questionText = str(q.questionText).slice(0, 600);
+      if (questionText.length < 5) continue;
+      const activityId = str(q.activityId);
+      out.push({
+        activityId: activityId && knownIds.has(activityId) ? activityId : null,
+        activityTitle: (str(q.activityTitle) || 'Project activity').slice(
+          0,
+          240,
+        ),
+        questionText,
+        countLabel: str(q.countLabel) ? str(q.countLabel).slice(0, 160) : null,
+        sourceFieldIds: ['section10.followup_questions'],
+        reason:
+          q.source === 'student'
+            ? 'Written by the student on 9.5'
+            : 'Suggested question kept by the student on 9.5',
+        generatedBy: 'student',
+      });
+      if (out.length >= 10) break;
+    }
+    return out;
+  }
+
   private async replaceQuestions(
     fu: ReportFollowUp,
     generated: Array<
-      GeneratedFollowUpQuestion & { generatedBy: 'rules' | 'ai' | 'admin' }
+      GeneratedFollowUpQuestion & { generatedBy: FollowUpQuestionOrigin }
     >,
   ): Promise<void> {
     await this.questions.delete({ followUpId: fu.id });

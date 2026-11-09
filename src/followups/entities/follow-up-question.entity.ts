@@ -10,7 +10,7 @@ import {
 } from 'typeorm';
 import { ReportFollowUp } from './report-follow-up.entity';
 
-export type FollowUpQuestionOrigin = 'rules' | 'ai' | 'admin';
+export type FollowUpQuestionOrigin = 'rules' | 'ai' | 'student' | 'admin';
 
 /** One verifiable question per distinct activity / durable benefit (spec §2). */
 @Entity('report_follow_up_questions')

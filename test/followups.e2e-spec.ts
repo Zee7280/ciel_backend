@@ -946,4 +946,90 @@ describe('Section 9.5 follow-up (real app + real Postgres)', () => {
     expect(bare.body.questions).toHaveLength(1);
     expect(bare.body.dueDate).toBe('');
   });
+
+  it('questions the student reviewed on 9.5 are the ones mailed; a blank kept question blocks submit', async () => {
+    const email = `reviewed-${uniq()}@partner.test`;
+    const reviewed = [
+      {
+        id: 'q1',
+        activityId: 'act1',
+        activityTitle: 'Classroom LED retrofit',
+        questionText:
+          'Are all six rooms still lit and ventilated every afternoon?',
+        countLabel: 'Rooms in use',
+        include: true,
+        source: 'suggested',
+      },
+      {
+        id: 'q2',
+        activityId: null,
+        activityTitle: 'Overall project',
+        questionText: 'Overall, are the benefits still continuing?',
+        include: false,
+        source: 'suggested',
+      },
+      {
+        id: 'own',
+        activityId: 'bogus',
+        activityTitle: 'Caretaker routine',
+        questionText:
+          'Has the caretaker kept the weekly maintenance check going?',
+        include: true,
+        source: 'student',
+      },
+    ];
+    // a kept question without text is refused at submit, with the field path
+    const { opp } = await liveOpp();
+    const lead = await student();
+    const seatRow = await seat(opp.id, lead);
+    await logHours(lead, seatRow.id, '09:00', '12:00', 3);
+    await logHours(lead, seatRow.id, '09:00', '12:00', 2);
+    const blank = await submit(
+      lead,
+      opp.id,
+      fullSections({
+        ...followupYes(email),
+        followup_questions: [{ ...reviewed[0], questionText: '' }],
+      }),
+    );
+    expect(blank.status).toBe(400);
+    expect(JSON.stringify(blank.body)).toContain(
+      'followup_questions.0.questionText',
+    );
+
+    const { rid } = await publishedReport({
+      ...followupYes(email),
+      followup_questions: reviewed,
+    });
+    const row = (await waitForFollowUp(rid, true))!;
+    const view = (await h.as(admin).get(`/admin/reports/${rid}/followup`))
+      .body as Rec;
+    expect(
+      view.questions.map((q: Rec) => [
+        q.questionText,
+        q.generatedBy,
+        q.activityId,
+      ]),
+    ).toEqual([
+      [
+        'Are all six rooms still lit and ventilated every afternoon?',
+        'student',
+        'act1',
+      ],
+      [
+        'Has the caretaker kept the weekly maintenance check going?',
+        'student',
+        null,
+      ],
+    ]);
+    await service.dispatchDue(new Date(`${row.dueDate}T06:00:00+05:00`));
+    const mail = mailsTo(email);
+    expect(mail).toHaveLength(1);
+    expect(
+      (mail[0].args[0] as Rec).questions.map((q: Rec) => q.questionText),
+    ).toEqual([
+      'Are all six rooms still lit and ventilated every afternoon?',
+      'Has the caretaker kept the weekly maintenance check going?',
+    ]);
+  });
 });

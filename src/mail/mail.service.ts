@@ -3368,6 +3368,135 @@ export class MailService {
     }
   }
 
+  /**
+   * Section 9.5 follow-up: the partner / responsible person is asked, after the report was
+   * published, whether each distinct benefit has continued. One email per dispatch kind
+   * (initial, reminder 1, final reminder, manual); the link opens a no-login response page.
+   * Throws when the transport fails so the scheduler can record the failure and retry.
+   */
+  async sendFollowUpVerification(input: {
+    to: string;
+    recipientName: string;
+    kind: 'initial' | 'reminder1' | 'reminder2' | 'manual';
+    intro: string;
+    subject: string;
+    projectRef: {
+      title: string;
+      projectId: string;
+      reportId: string;
+      host: string;
+      university: string;
+      location: string;
+      periodStart: string;
+      periodEnd: string;
+      objective: string;
+      beneficiaries: string;
+    };
+    questions: Array<{
+      activityTitle: string;
+      questionText: string;
+      countLabel?: string | null;
+    }>;
+    reviewLink: string;
+    declineLink: string;
+    dueDate: string;
+  }): Promise<{ messageId: string | null }> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const e = (v: string | null | undefined) => this.escHtmlPlain(v || '');
+    const pretty = (iso: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || 'Not set';
+      const d = new Date(`${iso}T12:00:00Z`);
+      return d.toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      });
+    };
+    const ref = input.projectRef;
+    const name = input.recipientName?.trim() || 'Partner Representative';
+    const minutes = Math.max(1, input.questions.length);
+    const refRows: Array<[string, string]> = [
+      ['Project', ref.title],
+      ['Project ID', ref.projectId],
+      ['Report ID', ref.reportId],
+      ['Host organisation', ref.host],
+      ['University', ref.university],
+      ['Location', ref.location],
+      [
+        'Project period',
+        [ref.periodStart, ref.periodEnd]
+          .filter(Boolean)
+          .map(pretty)
+          .join(' – '),
+      ],
+      ['Beneficiary group', ref.beneficiaries],
+      ['Follow-up due', pretty(input.dueDate)],
+    ];
+    const refHtml = refRows
+      .filter(([, v]) => v && v.trim())
+      .map(
+        ([k, v]) =>
+          `<tr><td style="padding:4px 10px 4px 0;color:#64748b;font-size:13px;white-space:nowrap;vertical-align:top;">${e(k)}</td><td style="padding:4px 0;font-size:13px;color:#0f172a;">${e(v)}</td></tr>`,
+      )
+      .join('');
+    const questionsHtml = input.questions
+      .map(
+        (q, i) =>
+          `<div style="border:1px solid #d9e8e5;border-radius:10px;padding:12px 14px;margin:0 0 10px 0;background:#fff;"><div style="font-size:12px;font-weight:700;color:#0c746e;">${i + 1}. ${e(q.activityTitle)}</div><div style="font-size:14px;color:#0f172a;margin-top:4px;">${e(q.questionText)}</div><div style="font-size:11px;color:#5f7b80;margin-top:6px;">Choose: Yes · Partially · No · Unable to verify${q.countLabel ? ` · Optional number: ${e(q.countLabel)}` : ''}</div></div>`,
+      )
+      .join('');
+    const questionsText = input.questions
+      .map(
+        (q, i) =>
+          `${i + 1}. ${q.activityTitle}\n   ${q.questionText}\n   Answer: Yes / Partially / No / Unable to verify${q.countLabel ? ` (optional count: ${q.countLabel})` : ''}`,
+      )
+      .join('\n\n');
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; border: 1px solid #e0e0e0; border-radius: 12px; overflow:hidden;">
+        <div style="background:#0c746e;color:#fff;padding:20px 24px;">
+          <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.85;">CIEL PK · Sustainability follow-up</div>
+          <h2 style="margin:6px 0 0 0;font-size:20px;">How is your community project doing now?</h2>
+          <div style="font-size:12px;opacity:.9;margin-top:4px;">Project-specific follow-up · ${e(pretty(input.dueDate))}</div>
+        </div>
+        <div style="padding:22px 24px;color:#0f172a;">
+          <p>Dear ${e(name)},</p>
+          <p>${e(input.intro)}</p>
+          <p><strong>Here is the exact project we are referring to:</strong></p>
+          <table style="border-collapse:collapse;background:#f5fbfa;border:1px solid #d9e8e5;border-radius:10px;padding:10px;width:100%;">${refHtml}</table>
+          ${ref.objective ? `<p style="margin-top:14px;"><strong>Original project goal:</strong> ${e(ref.objective)}</p>` : ''}
+          <p><strong>We are checking these distinct results:</strong></p>
+          ${questionsHtml}
+          <p>It takes around ${minutes}–${minutes + 1} minutes to respond. <strong>No account or registration is required.</strong></p>
+          <div style="text-align:center;margin:22px 0;">
+            <a href="${e(input.reviewLink)}" style="display:inline-block;background:#0c746e;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px;">Review and confirm ${input.questions.length} question${input.questions.length === 1 ? '' : 's'} →</a>
+          </div>
+          <p style="font-size:12px;color:#64748b;">Your response will be linked to this project and recorded as partner-reported; it will not be presented as independently audited evidence.</p>
+          <p style="font-size:12px;color:#64748b;">Not the correct contact? <a href="${e(input.declineLink)}" style="color:#b42318;">Decline / wrong representative</a>.</p>
+          <p style="margin-top:22px;">Thank you for helping us understand which benefits have lasted.</p>
+          <p>Warm regards,<br><strong>CIEL PK – Community Impact Education Lab</strong><br><span style="font-size:13px;color:#64748b;">www.cielpk.com</span></p>
+        </div>
+      </div>
+    `;
+    const text = `Dear ${name},\n\n${input.intro}\n\nPROJECT REFERENCE\n${refRows
+      .filter(([, v]) => v && v.trim())
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(
+        '\n',
+      )}\n${ref.objective ? `Original objective: ${ref.objective}\n` : ''}\nFOLLOW-UP QUESTIONS\n${questionsText}\n\nOpen your secure personal link to review and confirm your answers (no CIEL PK login required):\n${input.reviewLink}\n\nNot the correct contact? Decline here: ${input.declineLink}\n\nYour response will be linked to this project and will not be presented as independently audited evidence.\n\nRegards,\nCIEL PK – Community Impact Education Lab\nwww.cielpk.com`;
+    const info = await this.sendMailReliable({
+      from,
+      to: input.to,
+      subject: input.subject,
+      html,
+      text,
+    });
+    const messageId = (info as { messageId?: unknown })?.messageId;
+    return { messageId: typeof messageId === 'string' ? messageId : null };
+  }
+
   /** After Super Admin publishes, send the student Impact Package. Analysis report is attached for faculty / student / university only. */
   async sendReportPackagePublished(input: {
     to: string;

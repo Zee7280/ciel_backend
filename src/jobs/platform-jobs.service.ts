@@ -4,6 +4,10 @@ import { AttendanceSlaService } from '../engagement/attendance-sla.service';
 import { ParticipationReconcileService } from '../engagement/participation-reconcile.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { RecordIdsService } from '../record-ids/record-ids.service';
+import {
+  FollowUpsService,
+  type FollowUpDispatchRunResult,
+} from '../followups/followups.service';
 
 export const NIGHTLY_JOBS_AUDIT_ACTION = 'PLATFORM_NIGHTLY_JOBS_RUN';
 
@@ -33,6 +37,9 @@ export type NightlyJobsRunResult = {
     unmatched: number;
   } | null;
   record_ids_error: string | null;
+  /** Section 9.5 follow-up emails due today (null when the module is absent). Never affects `success`. */
+  follow_ups: FollowUpDispatchRunResult | null;
+  follow_ups_error: string | null;
   error: string | null;
 };
 
@@ -56,6 +63,7 @@ export class PlatformJobsService {
     private readonly participationReconcileService: ParticipationReconcileService,
     @Optional() private readonly auditLogs?: AuditLogsService,
     @Optional() private readonly recordIds?: RecordIdsService,
+    @Optional() private readonly followUps?: FollowUpsService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
@@ -84,6 +92,8 @@ export class PlatformJobsService {
       enrollment_reconcile: null,
       record_ids: null,
       record_ids_error: null,
+      follow_ups: null,
+      follow_ups_error: null,
       error: null,
     };
     try {
@@ -112,6 +122,19 @@ export class PlatformJobsService {
           err instanceof Error ? err.message : String(err);
         this.logger.error(
           `Nightly record-id backfill failed: ${result.record_ids_error}`,
+        );
+      }
+    }
+    // Section 9.5 partner follow-up emails whose due date (Asia/Karachi) has arrived. Isolated
+    // like the backfill: exactly-once per follow-up + kind, failures retried on later nights.
+    if (this.followUps) {
+      try {
+        result.follow_ups = await this.followUps.dispatchDue(new Date());
+      } catch (err) {
+        result.follow_ups_error =
+          err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `Nightly follow-up dispatch failed: ${result.follow_ups_error}`,
         );
       }
     }

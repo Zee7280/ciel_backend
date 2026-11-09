@@ -59,7 +59,15 @@ async function bootstrap() {
       req.rawBody = Buffer.from(buf);
     },
   });
-  const coreJson = json({ limit: bodyLimit });
+  // The mail-provider webhook verifies an HMAC over the raw bytes; only that path keeps them.
+  const isMailWebhookPath = (req: Request) =>
+    /\/mail\/provider-webhook\/?$/.test(req.originalUrl ?? req.url ?? '');
+  const coreJson = json({
+    limit: bodyLimit,
+    verify: (req: Request & { rawBody?: Buffer }, _res, buf: Buffer) => {
+      if (isMailWebhookPath(req)) req.rawBody = Buffer.from(buf);
+    },
+  });
   const coreUrlencoded = urlencoded({ extended: true, limit: bodyLimit });
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (isHubPath(req)) {

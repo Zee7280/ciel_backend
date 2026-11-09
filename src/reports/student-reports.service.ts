@@ -8,6 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FollowUpsService } from '../followups/followups.service';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, QueryFailedError, Repository } from 'typeorm';
@@ -256,6 +257,7 @@ export class StudentReportsService {
     @Optional()
     private readonly opportunityApplicationsService?: OpportunityApplicationsService,
     @Optional() private readonly recordIds?: RecordIdsService,
+    @Optional() private readonly followUpsService?: FollowUpsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: unknown): boolean {
@@ -6026,6 +6028,25 @@ export class StudentReportsService {
           `Student decision notification failed for report ${report.id}: ${(err as Error)?.message}`,
         ),
       );
+    }
+    // Section 9.5 follow-up: publish activates the partner check the student planned (idempotent,
+    // no-op when the student chose "No"); sending the report back / reopening / closing cancels
+    // any email still scheduled. Never blocks or fails the review decision itself.
+    if (!isPartnerReviewer && role === 'admin' && this.followUpsService) {
+      const followUps = this.followUpsService;
+      const task =
+        action === 'approve' && report.admin_status === 'approved'
+          ? followUps.activateForReport(report.id, actor)
+          : action === 'reject' || action === 'unlock' || action === 'close'
+            ? followUps.cancelForReport(report.id, `report_${action}`, actor)
+            : null;
+      if (task) {
+        void task.catch((err) =>
+          this.logger.error(
+            `Follow-up ${action} hook failed for report ${report.id}: ${(err as Error)?.message}`,
+          ),
+        );
+      }
     }
 
     const actionMessage =

@@ -27,6 +27,7 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { FollowUpsModule } from '../followups/followups.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     OrganizationsModule,
     FacultyUniversityScopeModule,
     NotificationsModule,
+    FollowUpsModule,
   ],
   controllers: [
     StudentsController,

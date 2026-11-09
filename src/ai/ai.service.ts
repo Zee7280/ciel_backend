@@ -2317,6 +2317,87 @@ ${JSON.stringify(data)}`;
    * Student "Generate & Auto-Fill": drafts the editable text fields of an opportunity from rough
    * notes. Returns validated fields only (see opportunity-draft.util.ts); the student reviews all.
    */
+  /**
+   * Section 9.5 follow-up (spec "Developer handoff"): optional server-side extraction of the
+   * verification questions from the approved report. The caller validates and falls back to the
+   * rule-based generator; this method only talks to the model and parses its JSON.
+   */
+  async generateFollowUpQuestionDraft(input: {
+    projectRef: Record<string, unknown>;
+    activities: unknown[];
+    outcomes: unknown[];
+    sustainability: Record<string, unknown>;
+    maxQuestions: number;
+  }): Promise<
+    Array<{
+      activityId: string | null;
+      activityTitle: string;
+      questionText: string;
+      countLabel: string | null;
+      sourceFieldIds: string[];
+      reason: string;
+    }>
+  > {
+    if (!this.isConfigured()) {
+      throw new Error('OPENAI_API_KEY missing');
+    }
+    const system = `You are CIEL PK's Sustainability Follow-up Question Extractor.
+INPUT: One approved project with its official project id / report id, opportunity objective, Section 4 activities and verified outputs, Section 5 measured or estimated outcomes, and Section 9 sustainability mechanisms and the student's intended follow-up check.
+TASK: Identify each materially distinct long-term benefit or maintained output that a partner could credibly observe after the project end date. Create one short, neutral, verifiable question per distinct benefit, normally 2–5 per project. Do not combine unrelated interventions into a single vague question.
+RULES:
+1. Use ONLY the supplied report fields. Cite the source field ids per question.
+2. Prioritise ongoing use, condition, adoption and measurable persistence over vague satisfaction.
+3. Distinguish completed versus planned/unverified activities; skip cancelled or undelivered ones. Never assert that a planned activity happened.
+4. For one-time relief with no expected lasting outcome, do NOT force sustainability verification.
+5. If a number is meaningful, provide an optional count label with its unit. Never invent counts.
+6. Merge questions only when they assess the exact same continuing benefit.
+7. The partner must be able to answer Yes / Partially / No / Unable to verify, optionally with a number or comment.
+8. Do not ask partners to certify causal learning gains or anything they cannot observe.
+9. Plain professional English, no field names inside the question text.
+OUTPUT: JSON only: {"questions":[{"activity_id":string|null,"activity_title":string,"question":string,"optional_numeric":{"label":string}|null,"source_field_ids":string[],"rationale":string}]}`;
+    const prompt = `MAX_QUESTIONS: ${Math.max(1, Math.min(10, input.maxQuestions))}
+PROJECT: ${JSON.stringify(input.projectRef)}
+SECTION_4_ACTIVITIES: ${JSON.stringify(input.activities).slice(0, 12_000)}
+SECTION_5_OUTCOMES: ${JSON.stringify(input.outcomes).slice(0, 6_000)}
+SECTION_9_SUSTAINABILITY_AND_FOLLOWUP_FOCUS: ${JSON.stringify(input.sustainability).slice(0, 4_000)}`;
+    const text = await this.generateSummaryWithOpenAI(prompt, {
+      systemMessage: system,
+      responseFormat: { type: 'json_object' },
+      temperature: 0.2,
+      maxTokens: 4000,
+      reasoningEffort: 'low',
+      timeoutMs: 60_000,
+      retryEmptyOnce: true,
+    });
+    const parsed = JSON.parse(text) as { questions?: unknown };
+    const rows = Array.isArray(parsed?.questions) ? parsed.questions : [];
+    const s = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    return rows
+      .map((row) => {
+        const r = (row && typeof row === 'object' ? row : {}) as Record<
+          string,
+          unknown
+        >;
+        const numeric = (
+          r.optional_numeric && typeof r.optional_numeric === 'object'
+            ? r.optional_numeric
+            : {}
+        ) as Record<string, unknown>;
+        return {
+          activityId: s(r.activity_id) || null,
+          activityTitle: s(r.activity_title) || 'Project activity',
+          questionText: s(r.question),
+          countLabel: s(numeric.label) || null,
+          sourceFieldIds: Array.isArray(r.source_field_ids)
+            ? r.source_field_ids.map(s).filter(Boolean)
+            : [],
+          reason: s(r.rationale),
+        };
+      })
+      .filter((q) => q.questionText.length >= 10)
+      .slice(0, Math.max(1, Math.min(10, input.maxQuestions)));
+  }
+
   async generateOpportunityDraft(
     input: OpportunityDraftInput,
   ): Promise<{ fields: OpportunityDraftFields; model: string }> {

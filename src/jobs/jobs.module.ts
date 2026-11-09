@@ -13,6 +13,7 @@ import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { FollowUpsModule } from '../followups/followups.module';
 import { HubJobsDisabledController } from './hub-jobs-disabled.controller';
 import { isHubEnabled } from '../integration-hub/hub-connection.constants';
 
@@ -23,6 +24,7 @@ import { isHubEnabled } from '../integration-hub/hub-connection.constants';
     MailModule,
     NotificationsModule,
     AuditLogsModule,
+    FollowUpsModule,
   ],
   controllers: [
     InternalJobsController,

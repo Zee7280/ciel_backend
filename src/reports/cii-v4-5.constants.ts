@@ -266,6 +266,8 @@ export interface CiiV45Result extends Omit<
   finalBadge: CiiV45Badge | null;
   qualityGates: { L4: boolean; L5: boolean; L6: boolean };
   publicationEligible: boolean;
+  /** Dimension table the sections were scored against (R2 current; R1 for pre-R2 payloads). */
+  rubricVersion?: string;
   rounding: string;
 }
 
@@ -358,12 +360,11 @@ export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
   {
     id: '6',
     name: 'Partnership & Collaboration',
-    maxPoints: 10,
+    maxPoints: 5,
     criteria: [
-      { key: 'relevance', weight: 2.5 },
-      { key: 'roleClarity', weight: 2.5 },
-      { key: 'collaboration', weight: 2.5 },
-      { key: 'ownership', weight: 2.5 },
+      { key: 'activeRole', weight: 2 },
+      { key: 'reciprocity', weight: 2 },
+      { key: 'feedbackLearning', weight: 1 },
     ],
   },
   {
@@ -394,15 +395,94 @@ export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
   {
     id: '9',
     name: 'Sustainability & Handover',
-    maxPoints: 5,
+    maxPoints: 10,
     criteria: [
-      { key: 'continuation', weight: 1.5 },
-      { key: 'owner', weight: 1.5 },
-      { key: 'handover', weight: 1.5 },
-      { key: 'realism', weight: 0.5 },
+      { key: 'retainedBenefits', weight: 2 },
+      { key: 'ownershipHandover', weight: 2 },
+      { key: 'maintenanceFeasibility', weight: 1 },
+      { key: 'followUpRetention', weight: 3 },
+      { key: 'adaptationReplication', weight: 2 },
     ],
   },
 ];
+
+/**
+ * Rubric revision of `CII_V45_DIMENSIONS`. R2 (CIEL-CII-2026.11-R2) moved five points from
+ * Partnership & Collaboration (10 → 5) to Sustainability & Handover (5 → 10) and re-cut the
+ * criteria of those two dimensions. Every other dimension, the 85 + 15 split, the anchor
+ * factors, the bands and the quality gates are unchanged.
+ */
+export const CII_V45_RUBRIC_VERSION = 'CIEL-CII-2026.11-R2' as const;
+export const CII_V45_LEGACY_RUBRIC_VERSION = 'CIEL-CII-2026.10-R1' as const;
+
+/**
+ * R1 shape of the two re-cut dimensions. Analyses stored before R2 (unapproved drafts, locks,
+ * independent runs) carry these criterion keys; `computeCiiV45Result` scores them against this
+ * table so an Admin can still approve a pre-R2 draft and a re-read of an old lock reproduces
+ * the same number. New AI runs always use `CII_V45_DIMENSIONS`.
+ */
+export const CII_V45_LEGACY_DIMENSIONS_R1: CiiV45DimensionDef[] =
+  CII_V45_DIMENSIONS.map((dim) => {
+    if (dim.id === '6') {
+      return {
+        ...dim,
+        maxPoints: 10,
+        criteria: [
+          { key: 'relevance', weight: 2.5 },
+          { key: 'roleClarity', weight: 2.5 },
+          { key: 'collaboration', weight: 2.5 },
+          { key: 'ownership', weight: 2.5 },
+        ],
+      };
+    }
+    if (dim.id === '9') {
+      return {
+        ...dim,
+        maxPoints: 5,
+        criteria: [
+          { key: 'continuation', weight: 1.5 },
+          { key: 'owner', weight: 1.5 },
+          { key: 'handover', weight: 1.5 },
+          { key: 'realism', weight: 0.5 },
+        ],
+      };
+    }
+    return dim;
+  });
+
+/**
+ * Picks the dimension table a stored/incoming payload was scored against. A payload is R1 when
+ * its Dimension 6 or 9 criterion keys are the R1 keys; anything else (including a payload whose
+ * sections are missing — the caller's validation reports that) is scored with the current table.
+ */
+export function resolveCiiV45Rubric(
+  sectionScores: ReadonlyArray<{
+    dimension: string;
+    criterionScores?: ReadonlyArray<{ criterion: string }>;
+  }>,
+): { version: string; dimensions: CiiV45DimensionDef[] } {
+  const keysOf = (id: string): string[] =>
+    (sectionScores.find((s) => s.dimension === id)?.criterionScores ?? []).map(
+      (c) => c.criterion,
+    );
+  const sameSet = (a: string[], b: string[]): boolean =>
+    a.length === b.length && a.every((k) => b.includes(k));
+  const isLegacy = (id: string): boolean => {
+    const keys = keysOf(id);
+    if (!keys.length) return false;
+    const legacy = CII_V45_LEGACY_DIMENSIONS_R1.find((d) => d.id === id)!;
+    return sameSet(
+      keys,
+      legacy.criteria.map((c) => c.key),
+    );
+  };
+  return isLegacy('6') || isLegacy('9')
+    ? {
+        version: CII_V45_LEGACY_RUBRIC_VERSION,
+        dimensions: CII_V45_LEGACY_DIMENSIONS_R1,
+      }
+    : { version: CII_V45_RUBRIC_VERSION, dimensions: CII_V45_DIMENSIONS };
+}
 
 export const CII_V45_BASE_MAX = CII_V45_DIMENSIONS.reduce(
   (sum, d) => sum + d.maxPoints,
@@ -860,7 +940,10 @@ export function computeCiiV45Result(
     fail('Exactly ten analytical dimensions required.');
   }
 
-  const sections: CiiV45SectionResult[] = CII_V45_DIMENSIONS.map((dim) => {
+  // Pre-R2 payloads (old criterion keys in Dim 6 / 9) are scored against the R1 table they were
+  // produced with; everything new is scored against the current rubric.
+  const rubric = resolveCiiV45Rubric(p.sectionScores);
+  const sections: CiiV45SectionResult[] = rubric.dimensions.map((dim) => {
     const matches = p.sectionScores.filter((s) => s.dimension === dim.id);
     if (matches.length !== 1) fail(`Missing/duplicate dimension ${dim.id}`);
     const s = matches[0];
@@ -1168,6 +1251,7 @@ export function computeCiiV45Result(
     finalBadge: null,
     qualityGates,
     publicationEligible: status === 'FINAL',
+    rubricVersion: rubric.version,
     rounding:
       'Hybrid CII v5.0.2: 85 AI report-quality points + 15 Admin evidence points + Admin-confirmed uplift <=5 - confirmed integrity deduction <=10; individual attendance is system-recorded; advisory Admin flags do not suppress CII; clamp 0..100; round once to 1 decimal; apply locked badge bands and cumulative L4-L6 gates.',
   };
@@ -1176,6 +1260,7 @@ export function computeCiiV45Result(
 export function getCiiV45ScoringConfig() {
   return {
     cii_v45_framework_version: CII_V45_FRAMEWORK_VERSION,
+    rubric_version: CII_V45_RUBRIC_VERSION,
     base_max: CII_V45_BASE_MAX,
     bonus_max: CII_V45_BONUS_MAX,
     max_total: CII_V45_MAX,

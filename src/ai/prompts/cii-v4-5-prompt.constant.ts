@@ -108,18 +108,24 @@ A simple but appropriate before/after measure can be Strong. Do not demand exper
 - \`stewardship\` (2.5), \`traceability\` (2.5), \`appropriateness\` (2.5), \`deliveryContribution\` (2.5).
 In-kind goods are not automatically converted to monetary value. Never invent PKR values. A zero-budget project can score highly if resources were managed well.
 
-### Dimension 6 — Partnership & Collaboration (10)
+### Dimension 6 — Partnership & Collaboration (5)
 Partner verification is handled when the opportunity is created/approved; do not expect or penalise a separate partner verification step at final report approval.
-- \`relevance\` (2.5), \`roleClarity\` (2.5), \`collaboration\` (2.5), \`ownership\` (2.5).
-One meaningful partner can outperform five nominal partners.
+- \`activeRole\` (2): host/community/partner contributions are specific and connect to delivery. An agreement, a logo or a named organization alone is insufficient.
+- \`reciprocity\` (2): community priorities and appropriate partner decisions, ownership or resource sharing are demonstrable, not just described as "collaboration".
+- \`feedbackLearning\` (1): relevant partner feedback and any agreed action are documented; non-response or unresolved matters are stated honestly.
+One meaningful partner can outperform five nominal partners. Do not list an organization that is not in the input.
 
 ### Dimension 8 — Reflection & Academic Growth (5)
 - \`learning\` (1.5), \`academicApplication\` (1), \`ethicalUnderstanding\` (1), \`improvement\` (1.5).
 Honest reflection can be exceptional without sophisticated vocabulary.
 
-### Dimension 9 — Sustainability & Handover (5)
-- \`continuation\` (1.5), \`owner\` (1.5), \`handover\` (1.5), \`realism\` (0.5).
-An honest, well-justified "stops" can score better than an unsupported claim that everything will continue.
+### Dimension 9 — Sustainability & Handover (10)
+- \`retainedBenefits\` (2): the report explains what continues and what stops, and separates achieved continuation from an expectation or a dependency on others.
+- \`ownershipHandover\` (2): appropriate people can use and maintain what remains; handover, local capacity and acceptance are supported where relevant (a named continuity owner is strong evidence).
+- \`maintenanceFeasibility\` (1): recurring resources, maintenance or a responsible completion route are realistic and proportionate; no unsupported funding assumption.
+- \`followUpRetention\` (3): a suitable later check (timing, method, who confirms) establishes whether benefits or use persisted. The report form captures a follow-up **plan**, not completed results: a specific, dated plan with a named responsible person earns planning credit (Sound/Strong), while observed retention with corroboration is required for Exceptional. No plan at all is Missing.
+- \`adaptationReplication\` (2): scaling or replication judgements fit the context and constraints, with practical lessons and appropriate action. Policy influence or scalability is not mandatory; an honest "not replicable, because…" can be Strong.
+An honest, well-justified "stops" can score better than an unsupported claim that everything will continue. Trees planted do not prove trees survived; training attendance does not prove behaviour change.
 
 ## 5. Evidence firewall — mandatory
 

@@ -2,13 +2,18 @@ import {
   CII_V45_ADMIN_EVIDENCE_MAX,
   CII_V45_AI_REPORT_MAX,
   CII_V45_DIMENSIONS,
+  CII_V45_LEGACY_DIMENSIONS_R1,
+  CII_V45_LEGACY_RUBRIC_VERSION,
+  CII_V45_RUBRIC_VERSION,
   CiiV45EvaluatorPayload,
   CiiV45CriterionScore,
   computeCiiV45Result,
   CiiV45ValidationError,
   applyAdminEvidenceAssessment,
   completeAdminEvidenceCriteria,
+  getCiiV45ScoringConfig,
   normalizeCiiV5AiPayload,
+  resolveCiiV45Rubric,
 } from './cii-v4-5.constants';
 
 function adminEvidenceFor(payload: CiiV45EvaluatorPayload) {
@@ -713,5 +718,133 @@ describe('computeCiiV45Result', () => {
       verificationStatus: 'PROCESSING_REQUIRED',
     });
     expect(computeCiiV45Result(pending).finalBadge).toBeNull();
+  });
+});
+
+describe('rubric R2 (CIEL-CII-2026.11-R2): Partnership 5, Sustainability 10', () => {
+  const dim = (id: string) => CII_V45_DIMENSIONS.find((d) => d.id === id)!;
+
+  it('moves five points from Dimension 6 to Dimension 9 and keeps every other maximum', () => {
+    expect(dim('6').maxPoints).toBe(5);
+    expect(dim('6').criteria.map((c) => c.key)).toEqual([
+      'activeRole',
+      'reciprocity',
+      'feedbackLearning',
+    ]);
+    expect(dim('9').maxPoints).toBe(10);
+    expect(dim('9').criteria.map((c) => c.key)).toEqual([
+      'retainedBenefits',
+      'ownershipHandover',
+      'maintenanceFeasibility',
+      'followUpRetention',
+      'adaptationReplication',
+    ]);
+    for (const d of CII_V45_DIMENSIONS) {
+      expect(d.criteria.reduce((t, c) => t + c.weight, 0)).toBeCloseTo(
+        d.maxPoints,
+        9,
+      );
+    }
+    expect(
+      Object.fromEntries(CII_V45_DIMENSIONS.map((d) => [d.id, d.maxPoints])),
+    ).toEqual({
+      '1': 10,
+      '2': 10,
+      '3': 5,
+      '4A': 15,
+      '4B': 15,
+      '5': 10,
+      '6': 5,
+      '7': 15,
+      '8': 5,
+      '9': 10,
+    });
+    expect(CII_V45_AI_REPORT_MAX).toBe(85);
+    expect(CII_V45_ADMIN_EVIDENCE_MAX).toBe(15);
+    expect(CII_V45_RUBRIC_VERSION).toBe('CIEL-CII-2026.11-R2');
+    expect(getCiiV45ScoringConfig().rubric_version).toBe('CIEL-CII-2026.11-R2');
+  });
+
+  it('scores a current payload against R2 maxima and stamps the rubric version', () => {
+    const result = computeCiiV45Result(withUniformAnchors(4, 4));
+    const six = result.sectionScores.find((s) => s.dimension === '6')!;
+    const nine = result.sectionScores.find((s) => s.dimension === '9')!;
+    expect(six.maximumPoints).toBe(5);
+    expect(six.score).toBe(5);
+    expect(nine.maximumPoints).toBe(10);
+    expect(nine.score).toBe(10);
+    expect(result.finalCII).toBe(100);
+    expect(result.rubricVersion).toBe('CIEL-CII-2026.11-R2');
+  });
+
+  it('still scores a pre-R2 payload (old Dim 6/9 keys) against the R1 table, so stored drafts approve unchanged', () => {
+    const legacyPayload: CiiV45EvaluatorPayload = {
+      ...buildValidPayload(),
+      sectionScores: CII_V45_LEGACY_DIMENSIONS_R1.map((d) => ({
+        dimension: d.id,
+        criterionScores: d.criteria.map(
+          ({ key }): CiiV45CriterionScore => ({
+            criterion: key,
+            anchor: 2,
+            qualityAnchor: 2,
+            verificationStatus: d.id === '7' ? 'ADMIN_VERIFIED' : 'AI_REPORT',
+            sourceRefs: ['s1'],
+            evidenceIds: [],
+            reasoningSummary: 'Sound.',
+          }),
+        ),
+      })),
+    };
+    expect(resolveCiiV45Rubric(legacyPayload.sectionScores).version).toBe(
+      CII_V45_LEGACY_RUBRIC_VERSION,
+    );
+    const result = computeCiiV45Result(legacyPayload);
+    const six = result.sectionScores.find((s) => s.dimension === '6')!;
+    const nine = result.sectionScores.find((s) => s.dimension === '9')!;
+    expect(six.maximumPoints).toBe(10);
+    expect(six.criterionScores.map((c) => c.criterion)).toEqual([
+      'relevance',
+      'roleClarity',
+      'collaboration',
+      'ownership',
+    ]);
+    expect(nine.maximumPoints).toBe(5);
+    // All-Sound is 70 under both tables: the 85 + 15 split is unchanged.
+    expect(result.finalCII).toBe(70);
+    expect(result.rubricVersion).toBe(CII_V45_LEGACY_RUBRIC_VERSION);
+    // Both tables total 100.
+    expect(
+      CII_V45_LEGACY_DIMENSIONS_R1.reduce((t, d) => t + d.maxPoints, 0),
+    ).toBe(100);
+  });
+
+  it('holds R2 criteria the AI omitted as pending (new keys are in the manifest the AI is told to emit)', () => {
+    const raw = buildValidPayload();
+    const stripped = {
+      ...raw,
+      sectionScores: raw.sectionScores.map((s) =>
+        s.dimension === '9'
+          ? {
+              ...s,
+              criterionScores: s.criterionScores.filter(
+                (c) => c.criterion !== 'followUpRetention',
+              ),
+            }
+          : s,
+      ),
+    };
+    const normalized = normalizeCiiV5AiPayload(stripped);
+    const nine = normalized.sectionScores.find((s) => s.dimension === '9')!;
+    expect(nine.criterionScores).toHaveLength(5);
+    expect(
+      nine.criterionScores.find((c) => c.criterion === 'followUpRetention')
+        ?.anchor,
+    ).toBe('P');
+    expect(normalized.adminReviewReasons.join(' ')).toContain(
+      '9.followUpRetention',
+    );
+    expect(computeCiiV45Result(normalized).scoreStatus).toBe(
+      'ADMIN_REVIEW_REQUIRED',
+    );
   });
 });

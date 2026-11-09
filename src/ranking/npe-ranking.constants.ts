@@ -4,13 +4,21 @@
  * Rubric versions. A run, its evaluations and its published snapshot are always scored with the
  * version they were created under, so publishing a new weighting never rewrites an older ranking.
  *  - NPE-1.1: locked CII 15 + eight criteria 85 (original weighting).
- *  - NPE-1.2: locked CII 10 + eight criteria 90 (Ranking Studio weighting). Current default.
- * The AI judgment (anchor 0–5 + confidence per criterion) is identical in both, so an evaluation
- * read under one version is re-scored — never re-read — under the other.
+ *  - NPE-1.2: locked CII 10 + eight criteria 90 (Ranking Studio weighting).
+ *  - NPE-1.3: same weights as NPE-1.2 (National Ranking Analyzer v2 contract). Current default.
+ *    What 1.3 adds is governance, not arithmetic: Admin criterion corrections with an evidence
+ *    locator and audit trail, an append-only administrator action log, and an evidence-based
+ *    challenge process on published rankings. The comparator is unchanged.
+ * The AI judgment (anchor 0–5 + confidence per criterion) is identical in every version, so an
+ * evaluation read under one version is re-scored — never re-read — under another.
  * To switch the default weighting back, change NPE_RUBRIC_VERSION only.
  */
-export const NPE_RUBRIC_VERSION = 'NPE-1.2' as const;
-export const NPE_SUPPORTED_RUBRIC_VERSIONS = ['NPE-1.2', 'NPE-1.1'] as const;
+export const NPE_RUBRIC_VERSION = 'NPE-1.3' as const;
+export const NPE_SUPPORTED_RUBRIC_VERSIONS = [
+  'NPE-1.3',
+  'NPE-1.2',
+  'NPE-1.1',
+] as const;
 export type NpeRubricVersion = (typeof NPE_SUPPORTED_RUBRIC_VERSIONS)[number];
 export const NPE_CII_SCALE = 'base100_bonus110' as const;
 
@@ -23,6 +31,16 @@ export const NPE_CII_SCALE = 'base100_bonus110' as const;
  *       deep personal-data redaction.
  */
 export const NPE_PAYLOAD_VERSION = 2 as const;
+
+/**
+ * Versions whose comparator arithmetic is identical belong to one "method family". A ranking
+ * published under NPE-1.2 and re-published under NPE-1.3 is the same ranking (same weights, same
+ * tie-break), so its revisions chain and its movement arrows stay comparable. NPE-1.1 has
+ * different weights and is its own family.
+ */
+export function npeMethodFamily(version: string): string {
+  return version === 'NPE-1.3' || version === 'NPE-1.2' ? 'NPE-1.2' : version;
+}
 
 export function isSupportedNpeRubricVersion(v: unknown): v is NpeRubricVersion {
   return (NPE_SUPPORTED_RUBRIC_VERSIONS as readonly string[]).includes(
@@ -115,6 +133,19 @@ export const NPE_WEIGHT_PROFILES: Record<
   NpeRubricVersion,
   { ciiWeight: number; criteria: Record<NpeCriterionKey, number> }
 > = {
+  'NPE-1.3': {
+    ciiWeight: 10,
+    criteria: {
+      impact: 22,
+      need: 13,
+      sustain: 9,
+      partner: 9,
+      efficiency: 9,
+      sdg: 9,
+      scale: 9,
+      learning: 10,
+    },
+  },
   'NPE-1.2': {
     ciiWeight: 10,
     criteria: {

@@ -2,8 +2,15 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsIn,
+  IsInt,
   IsOptional,
   IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -84,4 +91,65 @@ export class NpeStudioDto {
   @IsOptional()
   @IsString()
   name?: string;
+}
+
+/** NPE-1.3 Admin criterion correction: evidence locator + reason are mandatory. */
+export class NpeOverrideDto {
+  @IsUUID()
+  reportId: string;
+
+  @IsString()
+  @MaxLength(32)
+  criterion: string;
+
+  @IsInt()
+  @Min(0)
+  @Max(5)
+  anchor: number;
+
+  @IsString()
+  @MinLength(5)
+  @MaxLength(300)
+  locator: string;
+
+  @IsString()
+  @MinLength(20)
+  @MaxLength(4000)
+  reason: string;
+}
+
+export class NpeRevokeOverrideDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
+}
+
+/** Evidence-based challenge against one project's position in a published ranking. */
+export class NpeChallengeDto {
+  @IsUUID()
+  publicationId: string;
+
+  @IsUUID()
+  reportId: string;
+
+  @IsString()
+  @MinLength(5)
+  @MaxLength(300)
+  locator: string;
+
+  @IsString()
+  @MinLength(20)
+  @MaxLength(4000)
+  reason: string;
+}
+
+export class NpeResolveChallengeDto {
+  @IsIn(['upheld', 'dismissed'])
+  status: 'upheld' | 'dismissed';
+
+  @IsString()
+  @MinLength(10)
+  @MaxLength(4000)
+  resolution: string;
 }

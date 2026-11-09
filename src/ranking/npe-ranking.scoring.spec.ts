@@ -39,8 +39,9 @@ describe('npe-ranking.scoring', () => {
     }
   });
 
-  it('the current rubric is NPE-1.2: eight criteria worth 90 + locked CII worth 10', () => {
-    expect(NPE_RUBRIC_VERSION).toBe('NPE-1.2');
+  it('the current rubric is NPE-1.3: eight criteria worth 90 + locked CII worth 10 (same arithmetic as NPE-1.2)', () => {
+    expect(NPE_RUBRIC_VERSION).toBe('NPE-1.3');
+    expect(npeCriteriaFor('NPE-1.3')).toEqual(npeCriteriaFor('NPE-1.2'));
     expect(NPE_CRITERIA.reduce((sum, row) => sum + row.weight, 0)).toBe(90);
     expect(NPE_CRITERIA.map((c) => [c.key, c.weight])).toEqual([
       ['impact', 22],

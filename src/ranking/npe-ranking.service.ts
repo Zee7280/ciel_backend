@@ -33,6 +33,15 @@ import {
 } from './npe-ranking-eligibility';
 import { NpeRankingEvaluation } from './entities/npe-ranking-evaluation.entity';
 import { NpeRankingRun } from './entities/npe-ranking-run.entity';
+import { NpeCriterionOverride } from './entities/npe-criterion-override.entity';
+import {
+  NpeAdminAction,
+  type NpeAdminActionKind,
+} from './entities/npe-admin-action.entity';
+import {
+  applyCriterionOverrides,
+  type NpeAppliedOverride,
+} from './npe-overrides.util';
 import {
   NpeRankingSnapshot,
   type NpeSnapshotStanding,
@@ -118,7 +127,70 @@ export class NpeRankingService {
     @Optional()
     @InjectRepository(NpeStudioPublication)
     private readonly studioPublications?: Repository<NpeStudioPublication>,
+    @Optional()
+    @InjectRepository(NpeCriterionOverride)
+    private readonly overrides?: Repository<NpeCriterionOverride>,
+    @Optional()
+    @InjectRepository(NpeAdminAction)
+    private readonly actions?: Repository<NpeAdminAction>,
   ) {}
+
+  /**
+   * Append-only administrator action log (NPE-1.3). Never throws: an audit write must not fail the
+   * action it describes, so a missing table or a transient error is logged and swallowed.
+   */
+  async logAction(
+    actor: NpeActor,
+    scope: string,
+    action: NpeAdminActionKind,
+    extra: {
+      reportId?: string | null;
+      targetId?: string | null;
+      details?: Record<string, unknown>;
+    } = {},
+  ): Promise<void> {
+    if (!this.actions) return;
+    try {
+      await this.actions.save(
+        this.actions.create({
+          scope,
+          actorUserId: actor.userId,
+          role: actor.role,
+          action,
+          reportId: extra.reportId ?? null,
+          targetId: extra.targetId ?? null,
+          details: extra.details ?? {},
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Admin action log failed (${action}): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /** Active Admin criterion corrections of a scope, grouped by report. */
+  private async activeOverridesByReport(
+    scope: string,
+  ): Promise<Map<string, NpeCriterionOverride[]>> {
+    const out = new Map<string, NpeCriterionOverride[]>();
+    if (!this.overrides) return out;
+    try {
+      const rows = await this.overrides.find({
+        where: { scope, active: true },
+        order: { createdAt: 'ASC' },
+      });
+      for (const row of rows) {
+        if (!out.has(row.reportId)) out.set(row.reportId, []);
+        out.get(row.reportId)!.push(row);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Criterion corrections could not be read: ${(err as Error).message}`,
+      );
+    }
+    return out;
+  }
 
   scopeFor(actor: NpeActor): string {
     if (actor.role === 'ciel_admin') return 'national';
@@ -425,9 +497,13 @@ export class NpeRankingService {
       reason: r.reason,
       cii: r.cii,
       ciiSource: r.ciiSource,
+      version: r.version,
+      corrections: r.overrides?.length ?? 0,
       criteria: r.evaluation
         ? Object.fromEntries(
-            Object.entries(r.evaluation.criteria || {}).map(([key, j]) => [
+            Object.entries(
+              r.effectiveCriteria ?? r.evaluation.criteria ?? {},
+            ).map(([key, j]) => [
               key,
               { anchor: Number(j.anchor), confidence: j.confidence },
             ]),
@@ -459,6 +535,21 @@ export class NpeRankingService {
         (r) => r.status === 'Review' || r.status === 'Excluded',
       ).length,
     };
+  }
+
+  /**
+   * One project's row (gate, AI judgment, corrections, score) from the scope's latest run, or
+   * null when the project is outside the actor's pool. Used by the governance service to validate
+   * a criterion correction against the judgment it corrects.
+   */
+  async rowForReport(actor: NpeActor, reportId: string) {
+    const scope = this.scopeFor(actor);
+    const run = await this.runs.findOne({
+      where: { scope },
+      order: { createdAt: 'DESC' },
+    });
+    const { rows } = await this.buildRows(run, actor);
+    return rows.find((r) => r.id === reportId) ?? null;
   }
 
   /**
@@ -527,6 +618,10 @@ export class NpeRankingService {
     }
     run.reviewClearances = { ...(run.reviewClearances || {}), [itemId]: true };
     await this.runs.save(run);
+    await this.logAction(actor, run.scope, 'review.clear', {
+      targetId: run.id,
+      details: { itemId, summary: `Review item cleared: ${itemId}` },
+    });
     return this.serializeRun(run.id, actor);
   }
 
@@ -583,6 +678,15 @@ export class NpeRankingService {
     await this.snapshots.save(snapshot);
     run.status = 'published';
     await this.runs.save(run);
+    await this.logAction(actor, run.scope, 'run.publish', {
+      targetId: snapshot.id,
+      details: {
+        runId: run.id,
+        rubricVersion: run.rubricVersion,
+        ranked: standings.length,
+        summary: `Official excellence snapshot published (${standings.length} ranked, ${run.rubricVersion})`,
+      },
+    });
     // Existing badges follow the ranking that was just published (never blocks the publish).
     try {
       const national = run.scope === 'national';
@@ -906,6 +1010,12 @@ export class NpeRankingService {
     const facetsById = new Map(
       reports.map((r) => [r.id, buildStudioFacets(r)]),
     );
+    // NPE-1.3: Admin criterion corrections of this scope lie over the AI judgment. The AI
+    // judgment itself is kept untouched on the row (`evaluation`); scoring uses the corrected
+    // anchors (`effectiveCriteria`).
+    const overridesByReport = await this.activeOverridesByReport(
+      run?.scope ?? this.scopeFor(actor),
+    );
     const computed = reports.map((report) => {
       const pkg = buildNpePackageRecord(report);
       const gate = gateNpePackage(pkg);
@@ -956,10 +1066,27 @@ export class NpeRankingService {
           ? 'The report changed since it was read. Run the analysis again.'
           : 'Awaiting analysis';
       }
+      let effectiveCriteria: NpeAiEvaluation['criteria'] | null = null;
+      let overrides: NpeAppliedOverride[] = [];
+      let staleOverrides: string[] = [];
+      if (evaluation) {
+        const corrected = applyCriterionOverrides(
+          evaluation.criteria,
+          overridesByReport.get(report.id) ?? [],
+          pkg.version,
+        );
+        effectiveCriteria = corrected.criteria as NpeAiEvaluation['criteria'];
+        overrides = corrected.applied;
+        staleOverrides = corrected.stale;
+      }
       let score: ReturnType<typeof npeCalculate> | null = null;
       if (evaluation && status === 'Ranked' && pkg.cii != null) {
         try {
-          score = npeCalculate(pkg.cii, evaluation.criteria, rubric);
+          score = npeCalculate(
+            pkg.cii,
+            effectiveCriteria ?? evaluation.criteria,
+            rubric,
+          );
         } catch {
           status = 'Review';
           reason =
@@ -971,6 +1098,9 @@ export class NpeRankingService {
       return {
         p: pkg,
         evaluation,
+        effectiveCriteria,
+        overrides,
+        staleOverrides,
         evidenceRead,
         status,
         reason,
@@ -1008,6 +1138,12 @@ export class NpeRankingService {
       score: row.score?.total ?? null,
       scoreBreakdown: row.score,
       evaluation: row.evaluation,
+      /** AI anchors with active Admin corrections applied (what the score above was computed from). */
+      effectiveCriteria: row.effectiveCriteria,
+      /** Active Admin corrections applied to this package version. */
+      overrides: row.overrides,
+      /** Corrections made for an earlier package version: shown, never applied. */
+      staleOverrides: row.staleOverrides,
       evidenceRead: row.evidenceRead,
       package: row.p,
       facets: facetsById.get(row.p.id)!,

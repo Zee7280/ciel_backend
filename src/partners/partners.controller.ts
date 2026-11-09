@@ -44,10 +44,15 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NpeStudioService } from '../ranking/npe-studio.service';
+import { NpeGovernanceService } from '../ranking/npe-governance.service';
 import {
   NpeAnalyzeDto,
+  NpeChallengeDto,
   NpeClearReviewDto,
+  NpeOverrideDto,
   NpePublishDto,
+  NpeResolveChallengeDto,
+  NpeRevokeOverrideDto,
   NpeStudioDto,
 } from '../ranking/dto/npe-ranking.dto';
 
@@ -110,6 +115,7 @@ export class PartnersController {
     private readonly communityAward: CommunityAwardService,
     private readonly npeRanking: NpeRankingService,
     private readonly npeStudio: NpeStudioService,
+    private readonly npeGovernance: NpeGovernanceService,
     private readonly facultyUniversityScope: FacultyUniversityScopeService,
     private readonly facultyReportsService: FacultyReportsService,
   ) {}
@@ -385,6 +391,106 @@ export class PartnersController {
     const actor = await this.assertUniversityRankingActor(req);
     const data = await this.npeRanking.publish(actor, dto.runId);
     return { success: true, data };
+  }
+
+  // ---- NPE-1.3 governance (university scope): feed, corrections, audit, challenges, history ----
+
+  @Get('community-service/ranking/studio/feed')
+  async npeStudioFeed(@Request() req: PartnerRequest) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeGovernance.feed(actor) };
+  }
+
+  @Get('community-service/ranking/studio/audit')
+  async npeStudioAudit(@Request() req: PartnerRequest) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeGovernance.audit(actor) };
+  }
+
+  @Get('community-service/ranking/studio/overrides')
+  async npeStudioOverrides(
+    @Request() req: PartnerRequest,
+    @Query('reportId') reportId?: string,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.listOverrides(
+        actor,
+        reportId || undefined,
+      ),
+    };
+  }
+
+  @Post('community-service/ranking/studio/overrides')
+  async npeStudioSaveOverride(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeOverrideDto,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.saveOverride(actor, dto),
+    };
+  }
+
+  @Post('community-service/ranking/studio/overrides/:id/revoke')
+  async npeStudioRevokeOverride(
+    @Request() req: PartnerRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: NpeRevokeOverrideDto,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.revokeOverride(actor, id, dto?.reason),
+    };
+  }
+
+  @Get('community-service/ranking/studio/challenges')
+  async npeStudioChallenges(@Request() req: PartnerRequest) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.listChallenges(actor),
+    };
+  }
+
+  @Post('community-service/ranking/studio/challenges')
+  async npeStudioOpenChallenge(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeChallengeDto,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.openChallenge(actor, dto),
+    };
+  }
+
+  @Post('community-service/ranking/studio/challenges/:id/resolve')
+  async npeStudioResolveChallenge(
+    @Request() req: PartnerRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: NpeResolveChallengeDto,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.resolveChallenge(actor, id, dto),
+    };
+  }
+
+  @Get('community-service/ranking/studio/project/:reportId/history')
+  async npeStudioProjectHistory(
+    @Request() req: PartnerRequest,
+    @Param('reportId', new ParseUUIDPipe()) reportId: string,
+  ) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return {
+      success: true,
+      data: await this.npeGovernance.projectRankHistory(actor, reportId),
+    };
   }
 
   /** Blocked: independent AI analysis is an admin-only action (see admin/community-service). */

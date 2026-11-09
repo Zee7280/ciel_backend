@@ -242,6 +242,18 @@ export class NpeStudioService {
       }
       throw err;
     }
+    await this.ranking.logAction(actor, pool.scope, 'studio.publish', {
+      targetId: saved.id,
+      details: {
+        name: saved.name,
+        revision: saved.revision,
+        lens: saved.lens,
+        groupBy: saved.groupBy,
+        rows: saved.rows.length,
+        rubricVersion: saved.rubricVersion,
+        summary: `Published “${saved.name}”${saved.revision > 1 ? ` (update ${saved.revision})` : ''} · ${saved.rows.length} rows`,
+      },
+    });
     return { status: 'published' as const, publication: this.summary(saved) };
   }
 

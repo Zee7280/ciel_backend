@@ -54,10 +54,15 @@ import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-a
 import { ApproveCiiV45Dto } from '../faculty/dto/approve-cii-v4-5.dto';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NpeStudioService } from '../ranking/npe-studio.service';
+import { NpeGovernanceService } from '../ranking/npe-governance.service';
 import {
   NpeAnalyzeDto,
+  NpeChallengeDto,
   NpeClearReviewDto,
+  NpeOverrideDto,
   NpePublishDto,
+  NpeResolveChallengeDto,
+  NpeRevokeOverrideDto,
   NpeStudioDto,
 } from '../ranking/dto/npe-ranking.dto';
 
@@ -97,6 +102,7 @@ export class AdminController {
     private readonly communityAward: CommunityAwardService,
     private readonly npeRanking: NpeRankingService,
     private readonly npeStudio: NpeStudioService,
+    private readonly npeGovernance: NpeGovernanceService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly issueLogsService: IssueLogsService,
     private readonly auditLogsService: AuditLogsService,
@@ -600,6 +606,114 @@ export class AdminController {
     const data = await this.npeRanking.publish(
       { userId: req.user.id, role: 'ciel_admin' },
       dto.runId,
+    );
+    return { success: true, data };
+  }
+
+  // ---- NPE-1.3 governance: feed status, corrections, audit trail, challenges, rank history ----
+
+  /** "Check automatic feed": what the My Impact Wall connector can see for this scope. Writes nothing. */
+  @Get('community-service/ranking/studio/feed')
+  async npeStudioFeed(@Request() req: AdminRequest) {
+    const data = await this.npeGovernance.feed({
+      userId: req.user.id,
+      role: 'ciel_admin',
+    });
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/studio/audit')
+  async npeStudioAudit(@Request() req: AdminRequest) {
+    const data = await this.npeGovernance.audit({
+      userId: req.user.id,
+      role: 'ciel_admin',
+    });
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/studio/overrides')
+  async npeStudioOverrides(
+    @Request() req: AdminRequest,
+    @Query('reportId') reportId?: string,
+  ) {
+    const data = await this.npeGovernance.listOverrides(
+      { userId: req.user.id, role: 'ciel_admin' },
+      reportId || undefined,
+    );
+    return { success: true, data };
+  }
+
+  /** Admin criterion correction: evidence locator and reason required; the AI judgment stays on record. */
+  @Post('community-service/ranking/studio/overrides')
+  async npeStudioSaveOverride(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeOverrideDto,
+  ) {
+    const data = await this.npeGovernance.saveOverride(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/studio/overrides/:id/revoke')
+  async npeStudioRevokeOverride(
+    @Request() req: AdminRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: NpeRevokeOverrideDto,
+  ) {
+    const data = await this.npeGovernance.revokeOverride(
+      { userId: req.user.id, role: 'ciel_admin' },
+      id,
+      dto?.reason,
+    );
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/studio/challenges')
+  async npeStudioChallenges(@Request() req: AdminRequest) {
+    const data = await this.npeGovernance.listChallenges({
+      userId: req.user.id,
+      role: 'ciel_admin',
+    });
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/studio/challenges')
+  async npeStudioOpenChallenge(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeChallengeDto,
+  ) {
+    const data = await this.npeGovernance.openChallenge(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/studio/challenges/:id/resolve')
+  async npeStudioResolveChallenge(
+    @Request() req: AdminRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: NpeResolveChallengeDto,
+  ) {
+    const data = await this.npeGovernance.resolveChallenge(
+      { userId: req.user.id, role: 'ciel_admin' },
+      id,
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  /** Every published revision that placed one project (rank progression for the flashcard trend). */
+  @Get('community-service/ranking/studio/project/:reportId/history')
+  async npeStudioProjectHistory(
+    @Request() req: AdminRequest,
+    @Param('reportId', new ParseUUIDPipe()) reportId: string,
+  ) {
+    const data = await this.npeGovernance.projectRankHistory(
+      { userId: req.user.id, role: 'ciel_admin' },
+      reportId,
     );
     return { success: true, data };
   }

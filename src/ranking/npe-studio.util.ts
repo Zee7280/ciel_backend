@@ -15,6 +15,7 @@ import {
   NPE_CRITERIA,
   NPE_EVIDENCE_FACTORS,
   NPE_RUBRIC_VERSION,
+  npeMethodFamily,
   type NpeCriterionKey,
   type NpeEvidenceConfidence,
 } from './npe-ranking.constants';
@@ -430,7 +431,11 @@ export type StudioCandidate = {
   cii: number | null;
   /** `legacy`: approved before CII v4.5 locking (section11 CII); see isLegacyCiiReport. */
   ciiSource?: 'v45' | 'legacy' | null;
-  /** Per-criterion judgment from the stored evaluation (null until the package is read). */
+  /** Package version the judgment and any corrections were made against. */
+  version?: string;
+  /** Number of active Admin criterion corrections laid over the AI judgment. */
+  corrections?: number;
+  /** Per-criterion judgment (AI anchor with Admin corrections applied; null until the package is read). */
   criteria: Record<
     string,
     { anchor: number; confidence: NpeEvidenceConfidence }
@@ -665,7 +670,8 @@ export function studioSignature(
     groupBy,
     filters: sortedFilters,
     weights: lens === 'custom' ? weights : null,
-    method: rubricVersion,
+    // Same arithmetic = same ranking: NPE-1.3 publications continue the NPE-1.2 revision chain.
+    method: npeMethodFamily(rubricVersion),
   });
   return createHash('sha256').update(payload).digest('hex').slice(0, 40);
 }

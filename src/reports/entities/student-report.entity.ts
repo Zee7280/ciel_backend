@@ -489,7 +489,36 @@ export class StudentReport {
       numericLevel: number;
       gateCapped: boolean;
     } | null;
+    /** R3: the rubric the approval was taken under (absent on pre-R3 locks). */
+    rubricVersion?: string;
+    /** R3: the band the CII lands in; `finalBadge` is null while a 90+ candidate's L6 is pending. */
+    candidateBadge?: {
+      code: string;
+      name: string;
+      level: number;
+      numericLevel: number;
+      gateCapped: boolean;
+    } | null;
+    badgeStatus?: 'AWARDED' | 'L6_PENDING_QUALIFICATION' | null;
+    /** R3: the Admin's sourced L6 confirmations, recorded at approval or later (never changes the CII). */
+    l6Qualification?: {
+      observedRetention: boolean;
+      communityOwnership: boolean;
+      externalCorroboration: boolean;
+      sourceRef: string;
+      confirmedByAdminId?: string;
+      confirmedAt?: string;
+    } | null;
   } | null;
+
+  /**
+   * R3: labelled supplemental evidence a CIEL PK Super Admin attached during review (stored apart
+   * from the student's originals). `select: false` keeps it out of every default report read, so it
+   * can never reach a student, faculty, partner or public response; only the Admin review code
+   * loads it explicitly. Items are never hard-deleted (`removedAt`).
+   */
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  adminSupplementalEvidence?: Array<Record<string, unknown>> | null;
 
   /**
    * Independent AI analyses run from My Impact Wall.

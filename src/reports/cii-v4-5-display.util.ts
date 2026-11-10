@@ -44,9 +44,19 @@ export function pickCiiV45DisplayScore(
   );
 }
 
+/**
+ * R3: a locked 90+ CII whose L6 qualification is still pending has no awarded badge. It must not
+ * fall back to the recommended/diagnostic badge, which would show an L6 the student was not given.
+ */
+export function isCiiL6PendingLock(
+  lock?: { badgeStatus?: unknown } | null,
+): boolean {
+  return lock?.badgeStatus === 'L6_PENDING_QUALIFICATION';
+}
+
 export function pickCiiV45DisplayBadge(
   ciiV45: unknown,
-  lock?: { locked?: unknown } | null,
+  lock?: { locked?: unknown; badgeStatus?: unknown } | null,
 ): { name: string | null; level: number | null } | null {
   const cii = asRecord(ciiV45);
   if (!cii) return null;
@@ -60,6 +70,7 @@ export function pickCiiV45DisplayBadge(
     return { name, level };
   };
   if (isCiiLocked(lock)) {
+    if (isCiiL6PendingLock(lock)) return null;
     return (
       read(cii.finalBadge) ??
       read(cii.recommendedBadge) ??

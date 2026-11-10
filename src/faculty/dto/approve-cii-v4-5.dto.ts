@@ -6,9 +6,11 @@ import {
   IsBoolean,
   IsInt,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
   ValidateNested,
@@ -31,6 +33,23 @@ export class AdminEvidenceCriterionDto {
   @IsArray()
   @IsString({ each: true })
   evidenceIds?: string[];
+}
+
+/** R3: the Admin's sourced L6 (sustained impact) confirmations. */
+export class CiiL6QualificationDto {
+  @IsBoolean()
+  observedRetention: boolean;
+
+  @IsBoolean()
+  communityOwnership: boolean;
+
+  @IsBoolean()
+  externalCorroboration: boolean;
+
+  /** Exact report / follow-up / evidence source the confirmations rest on. */
+  @IsString()
+  @MaxLength(300)
+  sourceRef: string;
 }
 
 /**
@@ -75,4 +94,40 @@ export class ApproveCiiV45Dto {
   @IsOptional()
   @IsBoolean()
   exceptionalFeatureAdminVerified?: boolean;
+
+  /**
+   * R3 only (ignored for earlier rubrics): the sourced confirmations behind an L6 award. Without
+   * them a 90+ CII is approved and kept, with L6 left pending.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CiiL6QualificationDto)
+  l6Qualification?: CiiL6QualificationDto;
+}
+
+/** R3: Admin review of one dimension's AI criterion marks. `null` restores the AI mark. */
+export class ModerateCiiV45Dto {
+  @IsString()
+  dimension: string;
+
+  /** criterion key -> reviewed points (0..criterion maximum, two decimals) or null to restore. */
+  @IsObject()
+  criterionEdits: Record<string, number | null>;
+
+  /** Required (8+ characters) whenever a mark actually changes; checked by the service. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  reason?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  sourceRef?: string;
+
+  /** The moderation revision the editor read; a mismatch means someone else changed the marks. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedRevision?: number;
 }

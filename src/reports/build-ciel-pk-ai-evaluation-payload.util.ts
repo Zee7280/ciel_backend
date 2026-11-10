@@ -7,6 +7,10 @@ import {
 } from './cii-v4-5.constants';
 import { StudentReport } from './entities/student-report.entity';
 import {
+  activeSupplementalEvidence,
+  supplementalFileId,
+} from './supplemental-evidence.util';
+import {
   hasPublicSharePermission,
   resolveMediaVisibility,
 } from './media-visibility.util';
@@ -35,6 +39,10 @@ export type CielPkUploadedEvidenceFile = {
     sha256: string | null;
     size_bytes: number | null;
   };
+  /** R3: an Admin-added supplemental file (never a student original, never read by the AI). */
+  supplemental?: boolean;
+  label?: string;
+  uploaded_by_admin_id?: string;
 };
 
 export type CielPkAiEvaluationPayload = {
@@ -333,6 +341,31 @@ function buildEvidenceRegistry(report: StudentReport): {
     };
   });
   return { files, urlToFileId };
+}
+
+function buildSupplementalEvidenceFiles(
+  report: StudentReport,
+): CielPkUploadedEvidenceFile[] {
+  return activeSupplementalEvidence(report.adminSupplementalEvidence).map(
+    (item, index) => ({
+      file_id: supplementalFileId(index),
+      file_name: item.name,
+      file_type: inferMimeType(item.name),
+      file_category: 'admin_supplemental',
+      url: item.url,
+      storage_path: item.url.split('?')[0],
+      uploaded_by_student_id: null,
+      uploaded_at: item.addedAt || null,
+      linked_sections: [],
+      linked_claims: [],
+      visibility: 'internal' as const,
+      ai_accessible: false,
+      file_integrity: { sha256: null, size_bytes: null },
+      supplemental: true,
+      label: item.label,
+      uploaded_by_admin_id: item.addedByAdminId,
+    }),
+  );
 }
 
 /** Same order as the submit gate (`requiredHoursPerStudentFromOpportunity`): timeline hours, then the
@@ -960,7 +993,14 @@ export function buildCielPkAiEvaluationPayload(
     section8_evidence_verification: section8,
     section9_reflection_learning: mapSection9(section9Raw),
     section10_sustainability_continuation: mapSection10(section10Raw),
-    uploaded_evidence_files: uploadedEvidenceFiles,
+    // Student originals first, then any Admin supplemental files (ADM-001...). The student-original
+    // ids (EV-001...) and the section-8 check below are unaffected by supplemental files, and the
+    // list is stripped before the AI call, so supplemental files only join the inventory and the
+    // analysis fingerprint.
+    uploaded_evidence_files: [
+      ...uploadedEvidenceFiles,
+      ...buildSupplementalEvidenceFiles(report),
+    ],
     system_validation: buildSystemValidation(
       report,
       uploadedEvidenceFiles,

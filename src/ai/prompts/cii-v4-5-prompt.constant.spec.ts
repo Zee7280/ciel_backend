@@ -38,9 +38,33 @@ describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifes
       /pending faculty\/partner attendance verification/i,
     );
     expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/no separate live-attendance/i);
-    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('hoursCompletion');
+    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('hoursRequirement');
     expect(CII_V4_5_EVALUATOR_PROMPT).not.toContain('hoursConsistency');
+    expect(CII_V4_5_EVALUATOR_PROMPT).not.toContain('hoursCompletion');
     expect(CII_V4_5_EVALUATOR_PROMPT).toContain('sectionAnalyses');
     expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/primary\/main SDG/i);
+  });
+});
+
+describe('CII_V4_5_EVALUATOR_PROMPT — R3 criteria', () => {
+  it('names the rubric version and the 38-criterion AI layer', () => {
+    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('CIEL-CII-2026.11-R3');
+    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('38 criteria');
+  });
+
+  it.each(CII_V45_AI_DIMENSIONS)(
+    'guides every criterion of dimension "$id" with its exact key and weight',
+    (dim) => {
+      for (const c of dim.criteria) {
+        expect(CII_V4_5_EVALUATOR_PROMPT).toContain(
+          `\`${c.key}\` (${c.weight})`,
+        );
+      }
+    },
+  );
+
+  it('tells the model to hold a not-asked criterion pending rather than zero', () => {
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/anchor `P`/);
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/never converted into zero/);
   });
 });

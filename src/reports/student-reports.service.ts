@@ -2740,6 +2740,10 @@ export class StudentReportsService {
       level: publicLevel
         ? { level: publicLevel.level, name: publicLevel.name }
         : null,
+      // R3: a 90+ CII whose L6 award is still pending carries no badge, only this status.
+      ...(ciiV45Lock?.badgeStatus
+        ? { badge_status: ciiV45Lock.badgeStatus }
+        : {}),
     };
   }
 

@@ -27,13 +27,19 @@ import {
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import {
   applyAdminEvidenceAssessment,
+  assessCiiV45L6,
   completeAdminEvidenceCriteria,
   computeCiiV45Result,
   normalizeCiiV5AiPayload,
   resolveBadgeForScore,
+  resolveCiiV45BadgeR3,
+  resolveCiiV45Rubric,
+  CII_V45_ANCHOR_FACTORS,
   CII_V45_EVIDENCE_DIMENSION,
+  CiiV45AdminModeration,
   CiiV45Anchor,
   CiiV45EvaluatorPayload,
+  CiiV45L6Confirmations,
   CiiV45Result,
   CiiV45ValidationError,
 } from './cii-v4-5.constants';
@@ -62,18 +68,32 @@ import {
 import { trackingOrganizationName } from './tracking-org-name.util';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { assertPacketReadyForAnalysis } from './impact-package-packet.util';
+import {
+  activeSupplementalEvidence,
+  parseSupplementalEvidence,
+  SupplementalEvidenceItem,
+} from './supplemental-evidence.util';
+import {
+  assertStudentReportUploadMeta,
+  studentReportPresignExpiresInSeconds,
+} from '../common/student-report-file-upload';
 import { groupSiblingSeats } from '../engagement/team-lead-canonical.util';
 
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
   ciiV45?: unknown;
-  ciiV45Lock?: { locked?: unknown; adminApprovedScore?: unknown } | null;
+  ciiV45Lock?: {
+    locked?: unknown;
+    adminApprovedScore?: unknown;
+    badgeStatus?: unknown;
+  } | null;
 }): {
   cii_analyser_run: boolean;
   cii_provisional: number | null;
   cii_locked: boolean;
   cii_level_name: string | null;
   cii_numeric_level: number | null;
+  cii_badge_status?: string;
 } {
   const score = pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
   const ciiFinal = score == null ? null : Math.round(score * 10) / 10;
@@ -95,6 +115,9 @@ export function mapFacultyListCii(report: {
     cii_locked: locked,
     cii_level_name: badge?.name ?? null,
     cii_numeric_level: badge?.level ?? null,
+    ...(typeof report.ciiV45Lock?.badgeStatus === 'string'
+      ? { cii_badge_status: report.ciiV45Lock.badgeStatus }
+      : {}),
   };
 }
 
@@ -1012,7 +1035,172 @@ export class FacultyReportsService {
       throw new NotFoundException('Report not found.');
     }
     this.assertFeeClearedForCii(report);
+    // R3: the supplemental-evidence column is `select: false`; the Admin review path loads it
+    // explicitly so it joins the inventory and the analysis fingerprint.
+    report.adminSupplementalEvidence = await this.loadSupplementalEvidence(
+      report.id,
+    );
     return report;
+  }
+
+  private async loadSupplementalEvidence(
+    reportId: string,
+  ): Promise<Array<Record<string, unknown>> | null> {
+    // `adminSupplementalEvidence` is a `select: false` column: it is only returned when selected
+    // explicitly, which is what keeps it out of every other report read.
+    const row = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+      select: { id: true, adminSupplementalEvidence: true },
+    });
+    return row?.adminSupplementalEvidence ?? null;
+  }
+
+  private async assertSupplementalEditable(reportId: string) {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+      select: { id: true, ciiV45Lock: true, ciiV45: true },
+    });
+    if (!report) throw new NotFoundException('Report not found.');
+    if (report.ciiV45Lock?.locked) {
+      throw new BadRequestException(
+        "This report's CII score is locked. Re-run the analysis to reopen it before changing supplemental evidence.",
+      );
+    }
+    return report;
+  }
+
+  /** R3: the Admin's labelled supplemental files for a report (active ones only). */
+  async listSupplementalEvidenceForAdmin(id: string) {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id },
+      select: { id: true },
+    });
+    if (!report) throw new NotFoundException('Report not found.');
+    const items = activeSupplementalEvidence(
+      await this.loadSupplementalEvidence(id),
+    );
+    return { success: true, data: items };
+  }
+
+  /** R3: a short-lived upload URL for one supplemental file (same type and size rules as student uploads). */
+  async presignSupplementalEvidenceForAdmin(
+    id: string,
+    meta: { filename: string; contentType: string; size?: number },
+  ) {
+    await this.assertSupplementalEditable(id);
+    const checked = assertStudentReportUploadMeta(meta);
+    const presigned = await this.s3Service.presignPutObject({
+      folder: `admin-report-supplemental/${id}`,
+      originalName: checked.filename,
+      contentType: checked.contentType,
+      contentLength: checked.size,
+      expiresInSeconds: studentReportPresignExpiresInSeconds(checked.size),
+    });
+    return { success: true, data: presigned };
+  }
+
+  /**
+   * R3: registers an uploaded file as labelled supplemental evidence. It joins the evidence inventory
+   * and the analysis fingerprint, so an existing analysis becomes stale and must be re-run before the
+   * score can be approved. Marks are never changed by adding a file.
+   */
+  async addSupplementalEvidenceForAdmin(
+    id: string,
+    adminId: string,
+    input: {
+      url: string;
+      name: string;
+      label: string;
+      section?: string;
+      visibility?: 'public' | 'restricted' | 'private';
+      caption?: string;
+    },
+  ) {
+    const report = await this.assertSupplementalEditable(id);
+    const key = this.s3Service.keyFromPublicUrl(input.url);
+    if (!key || !key.startsWith(`admin-report-supplemental/${id}/`)) {
+      throw new BadRequestException(
+        'The file must be uploaded through the supplemental-evidence upload for this report.',
+      );
+    }
+    const existing = parseSupplementalEvidence(
+      await this.loadSupplementalEvidence(id),
+    );
+    if (existing.filter((i) => !i.removedAt).length >= 50) {
+      throw new BadRequestException(
+        'A report can carry at most 50 supplemental files.',
+      );
+    }
+    if (existing.some((i) => !i.removedAt && i.url === input.url)) {
+      throw new BadRequestException('That file is already attached.');
+    }
+    const item: SupplementalEvidenceItem = {
+      id: crypto.randomUUID(),
+      url: input.url,
+      name: input.name.trim() || key.split('/').pop() || 'file',
+      label: input.label.trim(),
+      section: (input.section ?? '').trim() || 'general',
+      visibility: input.visibility ?? 'restricted',
+      caption: (input.caption ?? '').trim() || null,
+      addedByAdminId: adminId,
+      addedAt: new Date().toISOString(),
+      removedAt: null,
+    };
+    await this.saveSupplementalEvidence(id, [...existing, item]);
+    return {
+      success: true,
+      data: item,
+      requiresReanalysis: !!report.ciiV45,
+    };
+  }
+
+  /** R3: soft-removes a supplemental file (kept in the record with who removed it and when). */
+  async removeSupplementalEvidenceForAdmin(
+    id: string,
+    adminId: string,
+    evidenceId: string,
+  ) {
+    const report = await this.assertSupplementalEditable(id);
+    const existing = parseSupplementalEvidence(
+      await this.loadSupplementalEvidence(id),
+    );
+    const target = existing.find((i) => i.id === evidenceId && !i.removedAt);
+    if (!target) throw new NotFoundException('Supplemental file not found.');
+    await this.saveSupplementalEvidence(
+      id,
+      existing.map((i) =>
+        i.id === evidenceId
+          ? {
+              ...i,
+              removedAt: new Date().toISOString(),
+              removedByAdminId: adminId,
+            }
+          : i,
+      ),
+    );
+    return { success: true, requiresReanalysis: !!report.ciiV45 };
+  }
+
+  private async saveSupplementalEvidence(
+    reportId: string,
+    items: SupplementalEvidenceItem[],
+  ) {
+    const updated = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({
+        adminSupplementalEvidence: items,
+      } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
+      .where('id = :id', { id: reportId })
+      .andWhere(
+        `("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .execute();
+    if (!updated.affected) {
+      throw new BadRequestException(
+        "This report's CII score is locked. Re-run the analysis to reopen it before changing supplemental evidence.",
+      );
+    }
   }
 
   /** Reports whose CII v4.5 AI analysis is running right now (double click / two admins). */
@@ -1146,6 +1334,7 @@ export class FacultyReportsService {
             ],
           }
         : {}),
+      ...this.carryModerationHistory(report),
       evidenceInspection,
       computedAt: new Date().toISOString(),
       runHistory: [
@@ -1197,6 +1386,270 @@ export class FacultyReportsService {
   }
 
   /**
+   * A re-analysis starts from a fresh AI baseline, so the Admin's earlier criterion edits are not
+   * re-applied; they are kept (never deleted) in `moderationHistory` for the audit trail.
+   */
+  private carryModerationHistory(report: StudentReport): {
+    moderationHistory?: unknown[];
+  } {
+    const prev = report.ciiV45 as {
+      adminModeration?: CiiV45AdminModeration;
+      moderationHistory?: unknown[];
+    } | null;
+    const history = Array.isArray(prev?.moderationHistory)
+      ? prev.moderationHistory
+      : [];
+    const had = prev?.adminModeration;
+    if (had && Object.keys(had.edits ?? {}).length) {
+      return {
+        moderationHistory: [
+          ...history,
+          {
+            supersededAt: new Date().toISOString(),
+            reason: 'reanalysis',
+            moderation: had,
+          },
+        ],
+      };
+    }
+    return history.length ? { moderationHistory: history } : {};
+  }
+
+  /**
+   * R3 Admin review of AI criterion marks. A saved change replaces the AI mark in that criterion's
+   * section total (the AI anchor and its mark stay on the criterion as the immutable baseline),
+   * recomputes the whole result and appends to an append-only log. Only an unlocked R3 analysis can
+   * be reviewed; `criterionEdits[key] = null` restores the AI mark. Dimension 7 is the Admin's own
+   * evidence panel and is not edited here.
+   */
+  async moderateCiiV45ForAdmin(
+    id: string,
+    adminId: string,
+    input: {
+      dimension: string;
+      criterionEdits: Record<string, number | null>;
+      reason: string;
+      sourceRef?: string | null;
+      expectedRevision?: number;
+    },
+  ) {
+    const report = await this.findReportForAdminCii(id);
+    if (report.ciiV45Lock?.locked) {
+      throw new BadRequestException(
+        "This report's CII score is already locked. Marks can no longer be reviewed.",
+      );
+    }
+    const stored = report.ciiV45 as unknown as CiiV45Result | null;
+    if (!stored?.sectionScores) {
+      throw new BadRequestException(
+        'Run the CII analysis before reviewing criterion marks.',
+      );
+    }
+    const rubric = resolveCiiV45Rubric(stored.sectionScores);
+    if (rubric.badgePolicy !== 'L6_QUALIFICATION') {
+      throw new BadRequestException(
+        'This analysis was produced under an earlier rubric. Re-run the analysis to review criterion marks.',
+      );
+    }
+    const dim = rubric.dimensions.find((d) => d.id === input.dimension);
+    if (!dim || dim.id === '7') {
+      throw new BadRequestException(
+        'Only AI report-quality dimensions can be reviewed here. Dimension 7 is scored in the evidence panel.',
+      );
+    }
+    const current: CiiV45AdminModeration = stored.adminModeration ?? {
+      revision: 0,
+      edits: {},
+      log: [],
+    };
+    if (
+      input.expectedRevision !== undefined &&
+      input.expectedRevision !== current.revision
+    ) {
+      throw new ConflictException(
+        'These marks were changed by someone else. Refresh and review them again.',
+      );
+    }
+    const section = stored.sectionScores.find((s) => s.dimension === dim.id)!;
+    const edits = { ...current.edits };
+    const log = [...current.log];
+    const reason = String(input.reason ?? '').trim();
+    const sourceRef = String(input.sourceRef ?? '').trim() || null;
+    const at = new Date().toISOString();
+    let changed = false;
+    for (const [key, value] of Object.entries(input.criterionEdits ?? {})) {
+      const def = dim.criteria.find((c) => c.key === key);
+      const crit = section.criterionScores.find((c) => c.criterion === key);
+      if (!def || !crit) {
+        throw new BadRequestException(`Unknown criterion ${dim.id}.${key}.`);
+      }
+      const aiScore =
+        crit.anchor === 'P'
+          ? null
+          : def.weight * CII_V45_ANCHOR_FACTORS[crit.anchor];
+      const k = `${dim.id}.${key}`;
+      const before = edits[k]?.points ?? aiScore;
+      const sameAsAi =
+        typeof value === 'number' &&
+        aiScore !== null &&
+        Math.abs(value - aiScore) < 1e-9;
+      if (value === null || sameAsAi) {
+        if (edits[k]) {
+          delete edits[k];
+          changed = true;
+          log.push({
+            dimension: dim.id,
+            criterion: key,
+            from: before,
+            to: aiScore,
+            aiScore,
+            reason,
+            sourceRef,
+            actorId: adminId,
+            at,
+          });
+        }
+        continue;
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new BadRequestException(`Enter a number for ${dim.id}.${key}.`);
+      }
+      if (edits[k] && Math.abs(edits[k].points - value) < 1e-9) continue;
+      edits[k] = { points: value, reason, sourceRef, actorId: adminId, at };
+      changed = true;
+      log.push({
+        dimension: dim.id,
+        criterion: key,
+        from: before,
+        to: value,
+        aiScore,
+        reason,
+        sourceRef,
+        actorId: adminId,
+        at,
+      });
+    }
+    if (!changed) {
+      return { success: true, data: report.ciiV45, unchanged: true };
+    }
+    if (reason.length < 8) {
+      throw new BadRequestException(
+        'Give a reason of at least 8 characters for the mark change.',
+      );
+    }
+    const moderation: CiiV45AdminModeration = {
+      revision: current.revision + 1,
+      edits,
+      log,
+    };
+    let next: CiiV45Result;
+    try {
+      next = computeCiiV45Result({
+        ...(stored as unknown as CiiV45EvaluatorPayload),
+        adminModeration: moderation,
+      });
+    } catch (error) {
+      if (error instanceof CiiV45ValidationError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
+    const updated = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({
+        ciiV45: next,
+      } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
+      .where('id = :id', { id: report.id })
+      .andWhere(
+        `("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .andWhere(
+        `COALESCE(("ciiV45"->'adminModeration'->>'revision')::int, 0) = :rev`,
+        { rev: current.revision },
+      )
+      .execute();
+    if (!updated.affected) {
+      throw new ConflictException(
+        'These marks were changed by someone else, or the score was locked. Refresh and try again.',
+      );
+    }
+    return { success: true, data: next };
+  }
+
+  /**
+   * R3: after approval, awards a pending L6 once the sourced sustained-impact confirmations are
+   * recorded. It never changes the CII or the approval hash: only the badge fields and the
+   * qualification record on the lock and the stored result.
+   */
+  async qualifyCiiV45L6ForAdmin(
+    id: string,
+    adminId: string,
+    input: Omit<CiiV45L6Confirmations, 'confirmedByAdminId' | 'confirmedAt'>,
+  ) {
+    const report = await this.findReportForAdminCii(id);
+    const lock = report.ciiV45Lock;
+    if (!lock?.locked) {
+      throw new BadRequestException(
+        'Approve the score first. L6 qualification applies to an approved 90+ CII.',
+      );
+    }
+    if (lock.badgeStatus !== 'L6_PENDING_QUALIFICATION') {
+      throw new BadRequestException(
+        'This approval has no pending L6 qualification.',
+      );
+    }
+    const stored = report.ciiV45 as unknown as CiiV45Result | null;
+    if (!stored?.sectionScores) {
+      throw new BadRequestException('The approved analysis is missing.');
+    }
+    const score = lock.adminApprovedScore ?? stored.finalCII;
+    const confirmations: CiiV45L6Confirmations = {
+      observedRetention: input.observedRetention === true,
+      communityOwnership: input.communityOwnership === true,
+      externalCorroboration: input.externalCorroboration === true,
+      sourceRef: String(input.sourceRef ?? '').trim(),
+      confirmedByAdminId: adminId,
+      confirmedAt: new Date().toISOString(),
+    };
+    const l6 = assessCiiV45L6(score, stored.sectionScores, confirmations);
+    if (l6.status !== 'QUALIFIED') {
+      throw new BadRequestException(
+        `L6 qualification is not met: ${l6.reasons.join('; ')}.`,
+      );
+    }
+    const award = resolveCiiV45BadgeR3(score, true);
+    const updated = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({
+        ciiV45: {
+          ...(stored as unknown as Record<string, unknown>),
+          finalBadge: award.badge,
+          badgeStatus: award.status,
+          l6Assessment: l6,
+          l6Qualification: confirmations,
+        },
+        ciiV45Lock: {
+          ...lock,
+          finalBadge: award.badge,
+          badgeStatus: award.status,
+          l6Qualification: confirmations,
+        },
+      } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
+      .where('id = :id', { id: report.id })
+      .andWhere(`("ciiV45Lock"->>'locked') = 'true'`)
+      .andWhere(`("ciiV45Lock"->>'badgeStatus') = 'L6_PENDING_QUALIFICATION'`)
+      .execute();
+    if (!updated.affected) {
+      throw new ConflictException(
+        'The approval changed while you were confirming. Refresh and try again.',
+      );
+    }
+    return { success: true, data: { badge: award.badge, l6Assessment: l6 } };
+  }
+
+  /**
    * Approves and hash-locks the CII v5.0 Hybrid score. Admin-only, same as the run step.
    * `RESUBMISSION_REQUIRED` / `ADMIN_REVIEW_REQUIRED` are warnings for the analyser UI — Admin
    * may still publish the displayed score. A v5.0 run with Dimension 7 still pending must
@@ -1216,6 +1669,10 @@ export class FacultyReportsService {
       evidenceIds?: string[];
     }>,
     exceptionalFeatureAdminVerified?: boolean,
+    l6Qualification?: Omit<
+      CiiV45L6Confirmations,
+      'confirmedByAdminId' | 'confirmedAt'
+    >,
   ) {
     const report = await this.findReportForAdminCii(id);
     return this.persistCiiV45Approval(
@@ -1226,6 +1683,7 @@ export class FacultyReportsService {
       scoreModerationReason,
       evidenceCriteria,
       exceptionalFeatureAdminVerified,
+      l6Qualification,
     );
   }
 
@@ -1242,6 +1700,10 @@ export class FacultyReportsService {
       evidenceIds?: string[];
     }>,
     exceptionalFeatureAdminVerified?: boolean,
+    l6Qualification?: Omit<
+      CiiV45L6Confirmations,
+      'confirmedByAdminId' | 'confirmedAt'
+    >,
   ) {
     // Confirming the CII publishes the report (status -> verified), so it must follow the same
     // gate as the plain Approve action: never publish a draft, or a report that was just sent back
@@ -1335,28 +1797,78 @@ export class FacultyReportsService {
     void adminAdjustedScore;
     void scoreModerationReason;
     const adminApprovedScore = aiRecommendedScore;
-    const hasModeration = false;
 
-    // Moderation changes only the published number — it can never invent a badge the quality
-    // gates don't support. Re-derive the badge from the SAME gate results the calculator already
-    // computed (never hand-roll a second gate-walk), just against the (possibly moderated) score.
-    const finalBadge = resolveBadgeForScore(
-      adminApprovedScore,
-      stored.qualityGates,
-    );
-
+    // Which badge rule this analysis was scored under. R1/R2 keep the cumulative quality gates they
+    // were produced with; R3 uses the L6 qualification (a 90+ CII is kept and L6 stays pending
+    // without it, never replaced by L5).
+    // A legacy snapshot without sections has no rubric to read; it keeps the original gate rule.
+    const hasSections =
+      Array.isArray(stored.sectionScores) && stored.sectionScores.length > 0;
+    const rubric = resolveCiiV45Rubric(hasSections ? stored.sectionScores : []);
+    const r3 = hasSections && rubric.badgePolicy === 'L6_QUALIFICATION';
+    const storedR3 = stored as unknown as CiiV45Result;
+    // The Admin criterion edits already in force are the moderation; the lock keeps the AI baseline.
+    const hasModeration = r3 && storedR3.moderated === true;
+    const moderationReason = hasModeration
+      ? 'Admin reviewed AI criterion marks before approval.'
+      : undefined;
     const approvedAt = new Date().toISOString();
+    const l6Input: CiiV45L6Confirmations | undefined =
+      r3 && l6Qualification
+        ? {
+            observedRetention: l6Qualification.observedRetention === true,
+            communityOwnership: l6Qualification.communityOwnership === true,
+            externalCorroboration:
+              l6Qualification.externalCorroboration === true,
+            sourceRef: String(l6Qualification.sourceRef ?? '').trim(),
+            confirmedByAdminId: adminId,
+            confirmedAt: approvedAt,
+          }
+        : undefined;
+    const l6 = r3
+      ? assessCiiV45L6(adminApprovedScore, stored.sectionScores, l6Input)
+      : undefined;
+    const r3Badge = r3
+      ? resolveCiiV45BadgeR3(adminApprovedScore, l6?.status === 'QUALIFIED')
+      : null;
+    const finalBadge = r3
+      ? r3Badge!.badge
+      : resolveBadgeForScore(adminApprovedScore, stored.qualityGates);
+    // R3 audit baseline: what the AI proposed plus the Admin's evidence marks, before any edit.
+    const baselineRecommended =
+      r3 &&
+      typeof storedR3.aiProposalScore === 'number' &&
+      typeof storedR3.adminEvidenceScore === 'number'
+        ? Math.round(
+            (storedR3.aiProposalScore + storedR3.adminEvidenceScore + 1e-9) *
+              10,
+          ) / 10
+        : aiRecommendedScore;
+
     const decisionRecord = {
       reportId: report.id,
       inputFingerprint: stored.inputFingerprint,
-      aiRecommendedScore,
+      aiRecommendedScore: baselineRecommended,
       adminApprovedScore,
       scoreWasModerated: hasModeration,
-      scoreModerationReason: hasModeration ? scoreModerationReason : null,
+      scoreModerationReason: hasModeration ? moderationReason : null,
       badge: finalBadge?.name ?? null,
       adminId,
       approvedAt,
       note: note || '',
+      ...(r3
+        ? {
+            rubricVersion: rubric.version,
+            badgeStatus: r3Badge!.status,
+            l6Qualification: l6Input ?? null,
+            moderationDigest: hasModeration
+              ? crypto
+                  .createHash('sha256')
+                  .update(JSON.stringify(storedR3.adminModeration ?? null))
+                  .digest('hex')
+              : null,
+          }
+        : {}),
     };
     const hash = crypto
       .createHash('sha256')
@@ -1367,6 +1879,14 @@ export class FacultyReportsService {
       ...(stored as unknown as Record<string, unknown>),
       finalCII: adminApprovedScore,
       finalBadge,
+      ...(r3
+        ? {
+            candidateBadge: r3Badge!.candidate,
+            badgeStatus: r3Badge!.status,
+            l6Assessment: l6,
+            ...(l6Input ? { l6Qualification: l6Input } : {}),
+          }
+        : {}),
     };
     const nextCiiV45Lock: StudentReport['ciiV45Lock'] = {
       locked: true,
@@ -1376,11 +1896,19 @@ export class FacultyReportsService {
       adminNote: note,
       inputFingerprint: stored.inputFingerprint,
       scoreStatusAtLock: 'FINAL',
-      aiRecommendedScore,
+      aiRecommendedScore: baselineRecommended,
       adminApprovedScore,
       scoreWasModerated: hasModeration,
-      scoreModerationReason: hasModeration ? scoreModerationReason : undefined,
+      scoreModerationReason: hasModeration ? moderationReason : undefined,
       finalBadge,
+      ...(r3
+        ? {
+            rubricVersion: rubric.version,
+            candidateBadge: r3Badge!.candidate,
+            badgeStatus: r3Badge!.status,
+            l6Qualification: l6Input ?? null,
+          }
+        : {}),
     };
 
     const privateCandidate = isPrivateCandidateOpportunity(report.opportunity);

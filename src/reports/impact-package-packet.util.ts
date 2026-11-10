@@ -4,9 +4,11 @@ import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 
 /** Locked Student Report → Impact Package contract (HTML FINAL-110-SYNC). */
 export const IMPACT_PACKAGE_SYNC_CONTRACT = {
-  contract_version: '2026-10-06-FINAL-SYNC-1',
+  // R3 analyser contract. `schema_version` deliberately stays '3.0': the ranking package version is
+  // `<schema_version>:<timestamp>`, so changing it would invalidate every in-flight ranking package.
+  contract_version: '2026-11-08-STAKEHOLDER-REVIEW-2',
   schema_version: '3.0',
-  framework_version: '5.1-FINAL',
+  framework_version: '6.0',
   content_sections: 9,
   final_authority: 'CIEL PK Super Admin',
   scoring: {
@@ -14,6 +16,8 @@ export const IMPACT_PACKAGE_SYNC_CONTRACT = {
     ai_max: 85,
     admin_evidence_max: 15,
     final_max: 100,
+    rubric_version: 'CIEL-CII-2026.11-R3',
+    badge_policy_version: 'CIEL-BADGES-2026.11-R2',
   },
 } as const;
 

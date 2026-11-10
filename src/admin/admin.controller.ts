@@ -51,7 +51,15 @@ import { PlatformJobsService } from '../jobs/platform-jobs.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
-import { ApproveCiiV45Dto } from '../faculty/dto/approve-cii-v4-5.dto';
+import {
+  AddSupplementalEvidenceDto,
+  SupplementalEvidencePresignDto,
+} from './dto/supplemental-evidence.dto';
+import {
+  ApproveCiiV45Dto,
+  CiiL6QualificationDto,
+  ModerateCiiV45Dto,
+} from '../faculty/dto/approve-cii-v4-5.dto';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NpeStudioService } from '../ranking/npe-studio.service';
 import { NpeGovernanceService } from '../ranking/npe-governance.service';
@@ -771,6 +779,98 @@ export class AdminController {
       body.scoreModerationReason,
       body.evidenceCriteria,
       body.exceptionalFeatureAdminVerified,
+      body.l6Qualification,
+    );
+  }
+
+  /** R3: Admin's labelled supplemental evidence for a report (never visible to students/faculty). */
+  @Get('community-service/reports/:id/supplemental-evidence')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceListSupplementalEvidence(@Param('id') id: string) {
+    return await this.facultyReportsService.listSupplementalEvidenceForAdmin(
+      id,
+    );
+  }
+
+  @Post('community-service/reports/:id/supplemental-evidence/presign')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceSupplementalEvidencePresign(
+    @Param('id') id: string,
+    @Body() body: SupplementalEvidencePresignDto,
+  ) {
+    return await this.facultyReportsService.presignSupplementalEvidenceForAdmin(
+      id,
+      body,
+    );
+  }
+
+  @Post('community-service/reports/:id/supplemental-evidence')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceAddSupplementalEvidence(
+    @Request() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() body: AddSupplementalEvidenceDto,
+  ) {
+    return await this.facultyReportsService.addSupplementalEvidenceForAdmin(
+      id,
+      req.user.id,
+      body,
+    );
+  }
+
+  @Delete('community-service/reports/:id/supplemental-evidence/:evidenceId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceRemoveSupplementalEvidence(
+    @Request() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('evidenceId') evidenceId: string,
+  ) {
+    return await this.facultyReportsService.removeSupplementalEvidenceForAdmin(
+      id,
+      req.user.id,
+      evidenceId,
+    );
+  }
+
+  /** R3: Admin reviews AI criterion marks before approval (append-only log, AI baseline kept). */
+  @Post('community-service/reports/:id/cii-v4-5/moderate')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceCiiV45Moderate(
+    @Request() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() body: ModerateCiiV45Dto,
+  ) {
+    return await this.facultyReportsService.moderateCiiV45ForAdmin(
+      id,
+      req.user.id,
+      {
+        dimension: body.dimension,
+        criterionEdits: body.criterionEdits,
+        reason: body.reason ?? '',
+        sourceRef: body.sourceRef,
+        expectedRevision: body.expectedRevision,
+      },
+    );
+  }
+
+  /** R3: awards a pending L6 after approval once the sourced confirmations are recorded. */
+  @Post('community-service/reports/:id/cii-v4-5/l6-qualification')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceCiiV45QualifyL6(
+    @Request() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() body: CiiL6QualificationDto,
+  ) {
+    return await this.facultyReportsService.qualifyCiiV45L6ForAdmin(
+      id,
+      req.user.id,
+      body,
     );
   }
 

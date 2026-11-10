@@ -18,6 +18,8 @@ export interface RedactedCiiV45Lock {
   adminApprovedScore?: number;
   scoreWasModerated?: boolean;
   scoreModerationReason?: string;
+  /** R3: `L6_PENDING_QUALIFICATION` = a 90+ CII retained without an L6 award yet. Status only. */
+  badgeStatus?: string | null;
 }
 
 export interface RedactedCiiV45Badge {
@@ -39,6 +41,10 @@ export interface RedactedCiiV45 {
   finalBadge: RedactedCiiV45Badge | null;
   recommendedBadge: RedactedCiiV45Badge | null;
   diagnosticBadge: RedactedCiiV45Badge | null;
+  /** R3: the band the CII lands in and its award status (never the L6 qualification reasons). */
+  candidateBadge?: RedactedCiiV45Badge | null;
+  badgeStatus?: string | null;
+  rubricVersion?: unknown;
   sectionScores: Array<{
     dimension: unknown;
     name: unknown;
@@ -61,6 +67,7 @@ export type CiiV45LockInput =
       adminApprovedScore?: number;
       scoreWasModerated?: boolean;
       scoreModerationReason?: string;
+      badgeStatus?: string | null;
     }
   | null
   | undefined;
@@ -91,6 +98,7 @@ function redactLock(
     adminApprovedScore: ciiV45Lock.adminApprovedScore,
     scoreWasModerated: ciiV45Lock.scoreWasModerated,
     scoreModerationReason: ciiV45Lock.scoreModerationReason,
+    ...(ciiV45Lock.badgeStatus ? { badgeStatus: ciiV45Lock.badgeStatus } : {}),
   };
 }
 
@@ -129,6 +137,13 @@ export function redactCiiV45Fields(
       finalBadge: redactBadge(ciiV45.finalBadge),
       recommendedBadge: redactBadge(ciiV45.recommendedBadge),
       diagnosticBadge: redactBadge(ciiV45.diagnosticBadge),
+      ...(ciiV45.badgeStatus
+        ? {
+            candidateBadge: redactBadge(ciiV45.candidateBadge),
+            badgeStatus: ciiV45.badgeStatus as string,
+          }
+        : {}),
+      ...(ciiV45.rubricVersion ? { rubricVersion: ciiV45.rubricVersion } : {}),
       sectionScores,
       extraMileUplift: { total: extraMileUplift?.total ?? null },
       integrityPenalty: { points: integrityPenalty?.points ?? 0 },

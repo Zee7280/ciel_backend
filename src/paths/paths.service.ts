@@ -1221,7 +1221,12 @@ export class PathsService implements OnModuleInit {
       (e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email,
     );
     const annotated = await this.courseProjectAnnotate(matched);
-    return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
+    return this.attachStudents(
+      await this.attachLiveCourseworkRanks(annotated),
+      {
+        contact: true,
+      },
+    );
   }
 
   /** Draft cards from students this teacher supervises — same scoping as
@@ -1238,7 +1243,7 @@ export class PathsService implements OnModuleInit {
       (e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email,
     );
     const annotated = await this.courseProjectAnnotate(matched);
-    return this.attachStudents(annotated);
+    return this.attachStudents(annotated, { contact: true });
   }
 
   /**
@@ -2090,11 +2095,28 @@ export class PathsService implements OnModuleInit {
     return [...out].sort((a, b) => a - b);
   }
 
-  private async attachStudents<T extends { userId: string }>(entries: T[]) {
+  /** Joins the owning student account onto each entry. `contact: true` (the supervising teacher's
+   * own decks only) also carries the student's phone so a faculty nudge can open their WhatsApp
+   * chat directly; every other audience keeps the phone-free shape. */
+  private async attachStudents<T extends { userId: string }>(
+    entries: T[],
+    opts: { contact?: boolean } = {},
+  ) {
     if (!entries.length) return [];
     const users = await this.usersRepo.find({
       where: { id: In(entries.map((e) => e.userId)) },
-      select: ['id', 'name', 'email', 'institution', 'department', 'role'],
+      select: opts.contact
+        ? [
+            'id',
+            'name',
+            'email',
+            'institution',
+            'department',
+            'role',
+            'countryCode',
+            'phone',
+          ]
+        : ['id', 'name', 'email', 'institution', 'department', 'role'],
     });
     const userById = new Map(users.map((u) => [u.id, u]));
     return entries.map((entry) => ({

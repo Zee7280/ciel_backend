@@ -4088,3 +4088,81 @@ describe('PathsService — venture delete draft / withdraw submission', () => {
     },
   );
 });
+
+describe('PathsService — the supervising teacher receives the student contact for nudges', () => {
+  const draft = {
+    id: 'cp-1',
+    userId: 'student-1',
+    status: 'draft',
+    studentInfo: { teacherEmail: 'Prof@Uni.edu' },
+  };
+  const build = () => {
+    const courseProjectRepo = { find: jest.fn().mockResolvedValue([draft]) };
+    const usersRepo = {
+      find: jest.fn().mockResolvedValue([
+        {
+          id: 'student-1',
+          name: 'Mahnoor',
+          email: 'm@uni.edu',
+          countryCode: '+92',
+          phone: '3001234567',
+        },
+      ]),
+    };
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
+    );
+    jest
+      .spyOn(service as any, 'courseProjectAnnotate')
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    jest
+      .spyOn(service as any, 'attachLiveCourseworkRanks')
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    return { service, usersRepo };
+  };
+
+  it('faculty draft and submitted decks select the phone columns', async () => {
+    const { service, usersRepo } = build();
+    const [row] =
+      await service.listInProgressCourseProjectsForTeacher('prof@uni.edu');
+    expect(usersRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.arrayContaining(['countryCode', 'phone']) as unknown,
+      }),
+    );
+    expect(row.student).toEqual(
+      expect.objectContaining({ phone: '3001234567', countryCode: '+92' }),
+    );
+    await service.listCourseProjectsForTeacher('prof@uni.edu');
+    expect(usersRepo.find).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        select: expect.arrayContaining(['phone']) as unknown,
+      }),
+    );
+  });
+
+  it('the university deck keeps the phone-free student shape', async () => {
+    const { service, usersRepo } = build();
+    await (
+      service as unknown as {
+        attachStudents: (entries: unknown[]) => Promise<unknown[]>;
+      }
+    ).attachStudents([draft]);
+    const findMock = usersRepo.find as jest.Mock<
+      Promise<unknown[]>,
+      [{ select: string[] }]
+    >;
+    const call = findMock.mock.calls.at(-1)?.[0];
+    expect(call?.select).not.toContain('phone');
+    expect(call?.select).not.toContain('countryCode');
+  });
+});

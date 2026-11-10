@@ -68,6 +68,7 @@ export type CiiV45LockInput =
       scoreWasModerated?: boolean;
       scoreModerationReason?: string;
       badgeStatus?: string | null;
+      rubricVersion?: string;
     }
   | null
   | undefined;
@@ -90,14 +91,20 @@ function redactLock(
 ): RedactedCiiV45Lock | null {
   if (!ciiV45Lock) return null;
   if (!locked) return { locked: false };
+  // R3 locks record the AI baseline and that criterion marks were reviewed; that is an Admin audit
+  // detail, so a non-admin only ever sees the approved number (as before R3, when it was always
+  // unmoderated).
+  const r3 = Boolean(ciiV45Lock.rubricVersion);
   return {
     locked: true,
     hash: ciiV45Lock.hash,
     lockedAt: ciiV45Lock.lockedAt,
-    aiRecommendedScore: ciiV45Lock.aiRecommendedScore,
+    aiRecommendedScore: r3
+      ? ciiV45Lock.adminApprovedScore
+      : ciiV45Lock.aiRecommendedScore,
     adminApprovedScore: ciiV45Lock.adminApprovedScore,
-    scoreWasModerated: ciiV45Lock.scoreWasModerated,
-    scoreModerationReason: ciiV45Lock.scoreModerationReason,
+    scoreWasModerated: r3 ? false : ciiV45Lock.scoreWasModerated,
+    scoreModerationReason: r3 ? undefined : ciiV45Lock.scoreModerationReason,
     ...(ciiV45Lock.badgeStatus ? { badgeStatus: ciiV45Lock.badgeStatus } : {}),
   };
 }
@@ -137,7 +144,7 @@ export function redactCiiV45Fields(
       finalBadge: redactBadge(ciiV45.finalBadge),
       recommendedBadge: redactBadge(ciiV45.recommendedBadge),
       diagnosticBadge: redactBadge(ciiV45.diagnosticBadge),
-      ...(ciiV45.badgeStatus
+      ...(locked && ciiV45.badgeStatus
         ? {
             candidateBadge: redactBadge(ciiV45.candidateBadge),
             badgeStatus: ciiV45.badgeStatus as string,

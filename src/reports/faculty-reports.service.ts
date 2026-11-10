@@ -36,6 +36,7 @@ import {
   resolveCiiV45Rubric,
   CII_V45_ANCHOR_FACTORS,
   CII_V45_EVIDENCE_DIMENSION,
+  CII_V45_RUBRIC_VERSION,
   CiiV45AdminModeration,
   CiiV45Anchor,
   CiiV45EvaluatorPayload,
@@ -1117,15 +1118,24 @@ export class FacultyReportsService {
     },
   ) {
     const report = await this.assertSupplementalEditable(id);
-    const key = this.s3Service.keyFromPublicUrl(input.url);
-    if (!key || !key.startsWith(`admin-report-supplemental/${id}/`)) {
+    let key: string | null = null;
+    try {
+      key = this.s3Service.keyFromPublicUrl(input.url);
+    } catch {
+      key = null; // malformed percent-encoding
+    }
+    if (
+      !key ||
+      key.includes('..') ||
+      !key.startsWith(`admin-report-supplemental/${id}/`)
+    ) {
       throw new BadRequestException(
         'The file must be uploaded through the supplemental-evidence upload for this report.',
       );
     }
-    const existing = parseSupplementalEvidence(
-      await this.loadSupplementalEvidence(id),
-    );
+    const rawEvidence = await this.loadSupplementalEvidence(id);
+    const rawLength = Array.isArray(rawEvidence) ? rawEvidence.length : 0;
+    const existing = parseSupplementalEvidence(rawEvidence);
     if (existing.filter((i) => !i.removedAt).length >= 50) {
       throw new BadRequestException(
         'A report can carry at most 50 supplemental files.',
@@ -1146,7 +1156,7 @@ export class FacultyReportsService {
       addedAt: new Date().toISOString(),
       removedAt: null,
     };
-    await this.saveSupplementalEvidence(id, [...existing, item]);
+    await this.saveSupplementalEvidence(id, [...existing, item], rawLength);
     return {
       success: true,
       data: item,
@@ -1161,9 +1171,9 @@ export class FacultyReportsService {
     evidenceId: string,
   ) {
     const report = await this.assertSupplementalEditable(id);
-    const existing = parseSupplementalEvidence(
-      await this.loadSupplementalEvidence(id),
-    );
+    const rawEvidence = await this.loadSupplementalEvidence(id);
+    const rawLength = Array.isArray(rawEvidence) ? rawEvidence.length : 0;
+    const existing = parseSupplementalEvidence(rawEvidence);
     const target = existing.find((i) => i.id === evidenceId && !i.removedAt);
     if (!target) throw new NotFoundException('Supplemental file not found.');
     await this.saveSupplementalEvidence(
@@ -1177,6 +1187,7 @@ export class FacultyReportsService {
             }
           : i,
       ),
+      rawLength,
     );
     return { success: true, requiresReanalysis: !!report.ciiV45 };
   }
@@ -1184,6 +1195,7 @@ export class FacultyReportsService {
   private async saveSupplementalEvidence(
     reportId: string,
     items: SupplementalEvidenceItem[],
+    previousLength: number,
   ) {
     const updated = await this.studentReportsRepository
       .createQueryBuilder()
@@ -1195,10 +1207,15 @@ export class FacultyReportsService {
       .andWhere(
         `("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`,
       )
+      // optimistic: two Admins editing the list at once must not silently drop one file
+      .andWhere(
+        `COALESCE(jsonb_array_length("adminSupplementalEvidence"), 0) = :len`,
+        { len: previousLength },
+      )
       .execute();
     if (!updated.affected) {
-      throw new BadRequestException(
-        "This report's CII score is locked. Re-run the analysis to reopen it before changing supplemental evidence.",
+      throw new ConflictException(
+        'The evidence list changed or the score was locked. Refresh and try again.',
       );
     }
   }
@@ -1446,9 +1463,18 @@ export class FacultyReportsService {
       );
     }
     const rubric = resolveCiiV45Rubric(stored.sectionScores);
-    if (rubric.badgePolicy !== 'L6_QUALIFICATION') {
+    if (
+      rubric.badgePolicy !== 'L6_QUALIFICATION' ||
+      (stored as { rubricVersion?: string }).rubricVersion !==
+        CII_V45_RUBRIC_VERSION
+    ) {
       throw new BadRequestException(
         'This analysis was produced under an earlier rubric. Re-run the analysis to review criterion marks.',
+      );
+    }
+    if (FacultyReportsService.ciiV45RunsInFlight.has(report.id)) {
+      throw new ConflictException(
+        'An analysis is running for this report. Wait for it to finish, then review the new marks.',
       );
     }
     const dim = rubric.dimensions.find((d) => d.id === input.dimension);
@@ -1554,7 +1580,7 @@ export class FacultyReportsService {
       }
       throw error;
     }
-    const updated = await this.studentReportsRepository
+    const updateQb = this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
       .set({
@@ -1567,8 +1593,14 @@ export class FacultyReportsService {
       .andWhere(
         `COALESCE(("ciiV45"->'adminModeration'->>'revision')::int, 0) = :rev`,
         { rev: current.revision },
-      )
-      .execute();
+      );
+    // Bound to the analysis the Admin read: a re-run in between (fresh baseline, revision back to
+    // 0) must not be overwritten with a result derived from the old analysis.
+    const readAt = (stored as { computedAt?: string }).computedAt;
+    if (readAt) {
+      updateQb.andWhere(`"ciiV45"->>'computedAt' = :readAt`, { readAt });
+    }
+    const updated = await updateQb.execute();
     if (!updated.affected) {
       throw new ConflictException(
         'These marks were changed by someone else, or the score was locked. Refresh and try again.',
@@ -1805,7 +1837,13 @@ export class FacultyReportsService {
     const hasSections =
       Array.isArray(stored.sectionScores) && stored.sectionScores.length > 0;
     const rubric = resolveCiiV45Rubric(hasSections ? stored.sectionScores : []);
-    const r3 = hasSections && rubric.badgePolicy === 'L6_QUALIFICATION';
+    // R3 only when the analysis was explicitly stamped R3 by the engine: an unrecognised or odd
+    // shape never silently takes the new badge rule.
+    const r3 =
+      hasSections &&
+      rubric.badgePolicy === 'L6_QUALIFICATION' &&
+      (stored as { rubricVersion?: string }).rubricVersion ===
+        CII_V45_RUBRIC_VERSION;
     const storedR3 = stored as unknown as CiiV45Result;
     // The Admin criterion edits already in force are the moderation; the lock keeps the AI baseline.
     const hasModeration = r3 && storedR3.moderated === true;
@@ -1884,7 +1922,8 @@ export class FacultyReportsService {
             candidateBadge: r3Badge!.candidate,
             badgeStatus: r3Badge!.status,
             l6Assessment: l6,
-            ...(l6Input ? { l6Qualification: l6Input } : {}),
+            // explicit: an earlier approval's confirmations must not survive unlock + re-approval
+            l6Qualification: l6Input ?? undefined,
           }
         : {}),
     };

@@ -6,10 +6,16 @@ import {
 import { FacultyReportsService } from './faculty-reports.service';
 import {
   CII_V45_DIMENSIONS,
+  CII_V45_LEGACY_DIMENSIONS_R1,
+  CII_V45_LEGACY_RUBRIC_VERSION,
+  CII_V45_R2_DIMENSIONS,
+  CII_V45_R2_RUBRIC_VERSION,
   CII_V45_RUBRIC_VERSION,
+  pendingDimension7Section,
   CiiV45CriterionScore,
   CiiV45EvaluatorPayload,
   computeCiiV45Result,
+  normalizeCiiV5AiPayload,
 } from './cii-v4-5.constants';
 import {
   buildCielPkAiEvaluationPayloadV45,
@@ -899,5 +905,355 @@ describe('R3 pending-L6 display and redaction', () => {
     expect(text).not.toContain('secret');
     expect(text).not.toContain('adminModeration');
     expect(text).not.toContain('l6Assessment');
+  });
+});
+
+describe('stored analyses from earlier rubrics still approve on the R3 code, unchanged', () => {
+  /** An unapproved analysis exactly as an older deploy stored it: Dimension 7 pending, gate-based. */
+  async function olderDraft(
+    dims: typeof CII_V45_DIMENSIONS,
+    anchor: Anchor,
+  ): Promise<Row> {
+    const report: Row = {
+      id: 'report-1',
+      status: 'submitted',
+      section1: { team_lead: { hours: 20 } },
+      ciiV45Lock: null,
+    };
+    const fp = await fingerprintFor(report);
+    const payload: CiiV45EvaluatorPayload = {
+      ...r3Payload(fp, 2, 2),
+      sectionScores: [
+        ...dims
+          .filter((d) => d.id !== '7')
+          .map((dim) => ({
+            dimension: dim.id,
+            criterionScores: dim.criteria.map(
+              ({ key }): CiiV45CriterionScore => ({
+                criterion: key,
+                anchor,
+                qualityAnchor: anchor,
+                verificationStatus: 'AI_REPORT',
+                sourceRefs: ['s1'],
+                evidenceIds: [],
+                reasoningSummary: 'Judgement with a source.',
+              }),
+            ),
+          })),
+        pendingDimension7Section(),
+      ],
+      extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
+      adminEvidenceAssessment: { status: 'PENDING' },
+    };
+    report.ciiV45 = { ...computeCiiV45Result(payload) };
+    return report;
+  }
+  const d7 = CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map(
+    (c) => ({ criterion: c.key, anchor: 3 as const }),
+  );
+
+  it.each([
+    ['R2', CII_V45_R2_DIMENSIONS, CII_V45_R2_RUBRIC_VERSION],
+    ['R1', CII_V45_LEGACY_DIMENSIONS_R1, CII_V45_LEGACY_RUBRIC_VERSION],
+  ])(
+    'an unapproved %s draft is approved on its own table with the gate-based badge rule',
+    async (_name, dims, version) => {
+      const report = await olderDraft(dims, 4);
+      expect((report.ciiV45 as { rubricVersion: string }).rubricVersion).toBe(
+        version,
+      );
+      const out = (await makeService(report).service.approveCiiV45ForAdmin(
+        'report-1',
+        'admin-1',
+        undefined,
+        undefined,
+        undefined,
+        d7,
+      )) as unknown as Approval;
+      expect(out.data.ciiV45.rubricVersion).toBe(version);
+      // AI 85 + evidence 12.75: the same 97.8 as before this deploy
+      expect(out.data.ciiV45.finalCII).toBe(97.8);
+      // the original gate walk ran: no L6 without a verified exceptional feature, so capped to L5
+      expect(out.data.ciiV45Lock.finalBadge?.code).toBe('L5');
+      // none of the R3-only fields appear on an older analysis or its lock
+      expect(out.data.ciiV45.badgeStatus).toBeUndefined();
+      expect(out.data.ciiV45.candidateBadge).toBeUndefined();
+      expect(out.data.ciiV45Lock.badgeStatus).toBeUndefined();
+      expect(out.data.ciiV45Lock.rubricVersion).toBeUndefined();
+      expect(out.data.ciiV45Lock.scoreWasModerated).toBe(false);
+      expect(out.data.ciiV45Lock.l6Qualification).toBeUndefined();
+    },
+  );
+
+  it('refuses moderation and L6 qualification on an older analysis', async () => {
+    const report = await olderDraft(CII_V45_R2_DIMENSIONS, 2);
+    await expect(
+      makeService(report).service.moderateCiiV45ForAdmin('report-1', 'a', {
+        dimension: '1',
+        criterionEdits: { role: 1 },
+        reason: 'A long enough reason.',
+      }),
+    ).rejects.toThrow(/earlier rubric/);
+    await expect(
+      makeService(report).service.qualifyCiiV45L6ForAdmin(
+        'report-1',
+        'a',
+        qualified,
+      ),
+    ).rejects.toThrow(/Approve the score first/);
+  });
+
+  it('a lock approved before R3 still reads back through redaction and display exactly as before', () => {
+    const oldLock = {
+      locked: true,
+      hash: 'h',
+      lockedAt: 't',
+      adminApprovedScore: 84.4,
+      aiRecommendedScore: 84.4,
+      scoreWasModerated: false,
+      finalBadge: {
+        code: 'L5',
+        name: 'Distinguished Impact Contributor',
+        level: 5,
+        numericLevel: 5,
+        gateCapped: false,
+      },
+    };
+    const oldCii = {
+      finalCII: 84.4,
+      finalBadge: oldLock.finalBadge,
+      sectionScores: [
+        { dimension: '1', name: 'P', maximumPoints: 10, score: 8 },
+      ],
+    };
+    expect(pickCiiV45DisplayBadge(oldCii, oldLock)).toEqual({
+      name: 'Distinguished Impact Contributor',
+      level: 5,
+    });
+    const r = redactCiiV45Fields(oldCii, oldLock);
+    expect(r.ciiV45Lock).toEqual({
+      locked: true,
+      hash: 'h',
+      lockedAt: 't',
+      aiRecommendedScore: 84.4,
+      adminApprovedScore: 84.4,
+      scoreWasModerated: false,
+      scoreModerationReason: undefined,
+    });
+    expect(r.ciiV45).not.toHaveProperty('badgeStatus');
+    expect(r.ciiV45).not.toHaveProperty('candidateBadge');
+    expect(r.ciiV45).not.toHaveProperty('rubricVersion');
+  });
+});
+
+describe('review-driven hardening of the R3 flow', () => {
+  it('discards admin-only inputs the AI (or text injected into the report) returns', async () => {
+    const base = await approvableReport(2, 2);
+    const fp = (base.ciiV45 as { inputFingerprint: string }).inputFingerprint;
+    const injected = r3Payload(fp, 2, 2, {
+      adminModeration: {
+        revision: 1,
+        edits: {
+          '4B.observedChange': {
+            points: 4,
+            reason: 'x',
+            actorId: 'a',
+            at: 't',
+          },
+        },
+        log: [],
+      },
+      l6Qualification: qualified,
+    });
+    const cleaned = normalizeCiiV5AiPayload(injected);
+    expect(cleaned.adminModeration).toBeUndefined();
+    expect(cleaned.l6Qualification).toBeUndefined();
+    const result = computeCiiV45Result(cleaned);
+    expect(result.moderated).toBe(false);
+    expect(result.aiReportScore).toBe(result.aiProposalScore);
+  });
+
+  it('gives an AI-only R3 draft (Admin evidence pending) no band yet', () => {
+    const fp = 'fp';
+    const draft = normalizeCiiV5AiPayload({
+      ...r3Payload(fp, 4, 4),
+      adminEvidenceAssessment: { status: 'PENDING' },
+    });
+    const result = computeCiiV45Result(draft);
+    expect(result.scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+    expect(result.diagnosticCII).toBeNull();
+    expect(result.diagnosticBadge).toBeNull();
+    expect(result.candidateBadge).toBeNull();
+    expect(result.badgeStatus).toBeNull();
+  });
+
+  it('only an analysis stamped R3 takes the R3 badge rule or can be moderated', async () => {
+    const stamped = await approvableReport(4, 3);
+    const unstamped: Row = {
+      ...stamped,
+      ciiV45: {
+        ...(stamped.ciiV45 as Row),
+        rubricVersion: undefined,
+        qualityGates: { L4: true, L5: true, L6: false },
+      },
+    };
+    const out = (await makeService(unstamped).service.approveCiiV45ForAdmin(
+      'report-1',
+      'admin-1',
+    )) as unknown as Approval;
+    // gate rule, no R3 status or stamp invented
+    expect(out.data.ciiV45Lock.finalBadge?.code).toBe('L5');
+    expect(out.data.ciiV45Lock.badgeStatus).toBeUndefined();
+    expect(out.data.ciiV45Lock.rubricVersion).toBeUndefined();
+    await expect(
+      makeService(unstamped).service.moderateCiiV45ForAdmin('report-1', 'a', {
+        dimension: '1',
+        criterionEdits: { hoursRequirement: 3 },
+        reason: 'A long enough reason.',
+      }),
+    ).rejects.toThrow(/earlier rubric/);
+  });
+
+  it('shows non-admins only the approved number, never the AI baseline or that marks were reviewed', () => {
+    const lock = {
+      locked: true,
+      hash: 'h',
+      lockedAt: 't',
+      rubricVersion: CII_V45_RUBRIC_VERSION,
+      adminApprovedScore: 71.2,
+      aiRecommendedScore: 70,
+      scoreWasModerated: true,
+      scoreModerationReason:
+        'Admin reviewed AI criterion marks before approval.',
+      badgeStatus: 'AWARDED',
+    };
+    const out = redactCiiV45Fields(
+      { badgeStatus: 'AWARDED', candidateBadge: null, finalCII: 71.2 },
+      lock,
+    );
+    expect(out.ciiV45Lock).toEqual(
+      expect.objectContaining({
+        adminApprovedScore: 71.2,
+        aiRecommendedScore: 71.2,
+        scoreWasModerated: false,
+      }),
+    );
+    expect(JSON.stringify(out)).not.toContain('reviewed AI criterion marks');
+    // the band/status only appear once locked
+    const draft = redactCiiV45Fields(
+      {
+        badgeStatus: 'L6_PENDING_QUALIFICATION',
+        candidateBadge: { code: 'L6' },
+      },
+      { locked: false },
+    );
+    expect(draft.ciiV45).not.toHaveProperty('badgeStatus');
+    expect(draft.ciiV45).not.toHaveProperty('candidateBadge');
+  });
+
+  it('binds a mark review to the analysis it read and refuses it while a run is in flight', async () => {
+    const report = await approvableReport(2, 2);
+    (report.ciiV45 as Row).computedAt = '2026-11-10T10:00:00.000Z';
+    const { service, qb } = makeService(report);
+    await service.moderateCiiV45ForAdmin('report-1', 'admin-1', {
+      dimension: '1',
+      criterionEdits: { hoursRequirement: 3 },
+      reason: 'A long enough reason.',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('computedAt'),
+      { readAt: '2026-11-10T10:00:00.000Z' },
+    );
+    const inFlight = (
+      FacultyReportsService as unknown as {
+        ciiV45RunsInFlight: Set<string>;
+      }
+    ).ciiV45RunsInFlight;
+    inFlight.add('report-1');
+    try {
+      await expect(
+        makeService(report).service.moderateCiiV45ForAdmin('report-1', 'a', {
+          dimension: '1',
+          criterionEdits: { hoursRequirement: 3 },
+          reason: 'A long enough reason.',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    } finally {
+      inFlight.delete('report-1');
+    }
+  });
+
+  it("does not carry an earlier approval's L6 confirmations into a re-approval", async () => {
+    const report = await approvableReport(4, 3);
+    (report.ciiV45 as Row).l6Qualification = {
+      ...qualified,
+      confirmedByAdminId: 'old-admin',
+    };
+    const out = (await makeService(report).service.approveCiiV45ForAdmin(
+      'report-1',
+      'admin-1',
+    )) as unknown as Approval;
+    expect(out.data.ciiV45.l6Qualification).toBeUndefined();
+    expect(out.data.ciiV45Lock.l6Qualification).toBeNull();
+  });
+
+  describe('supplemental evidence safety', () => {
+    const good =
+      'https://bucket.s3.eu.amazonaws.com/admin-report-supplemental/report-1/a.pdf';
+    const base = (): Row => ({
+      id: 'report-1',
+      status: 'submitted',
+      ciiV45Lock: null,
+      ciiV45: { scoreStatus: 'FINAL' },
+      adminSupplementalEvidence: [],
+    });
+
+    it('rejects traversal and malformed percent-encoding in the file URL', async () => {
+      const { service, s3 } = makeService(base());
+      await expect(
+        service.addSupplementalEvidenceForAdmin('report-1', 'a', {
+          url: good.replace('/a.pdf', '/../other/a.pdf'),
+          name: 'a.pdf',
+          label: 'Letter',
+        }),
+      ).rejects.toThrow(/supplemental-evidence upload/);
+      s3.keyFromPublicUrl.mockImplementationOnce(() => {
+        throw new URIError('malformed');
+      });
+      await expect(
+        service.addSupplementalEvidenceForAdmin('report-1', 'a', {
+          url: `${good}%E0%A4%A`,
+          name: 'a.pdf',
+          label: 'Letter',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('guards the write on the list the Admin read, so a concurrent add is not silently lost', async () => {
+      const withTwo = {
+        ...base(),
+        adminSupplementalEvidence: [
+          { id: 'e1', url: `${good}?1`, name: 'a', label: 'One', addedAt: 't' },
+          { id: 'e2', url: `${good}?2`, name: 'b', label: 'Two', addedAt: 't' },
+        ],
+      };
+      const { service, qb } = makeService(withTwo);
+      await service.addSupplementalEvidenceForAdmin('report-1', 'a', {
+        url: good,
+        name: 'c.pdf',
+        label: 'Three',
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('jsonb_array_length'),
+        { len: 2 },
+      );
+      await expect(
+        makeService(withTwo, 0).service.addSupplementalEvidenceForAdmin(
+          'report-1',
+          'a',
+          { url: good, name: 'c.pdf', label: 'Three' },
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
   });
 });

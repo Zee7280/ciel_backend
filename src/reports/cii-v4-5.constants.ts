@@ -1164,6 +1164,11 @@ export function normalizeCiiV5AiPayload(
       ? { ...raw.exceptionalFeature, adminVerified: false }
       : null,
     adminEvidenceAssessment: { status: 'PENDING' },
+    // Admin-only inputs. Whatever the model (or text injected into the report) returns for them is
+    // discarded: only the Admin review endpoints and the approval request may set them.
+    adminModeration: undefined,
+    l6Qualification: undefined,
+    ...({ moderationHistory: undefined, l6Assessment: undefined } as object),
   };
 }
 
@@ -1626,7 +1631,9 @@ export function computeCiiV45Result(
         L6: l6Assessment?.status === 'QUALIFIED',
       }
     : { L4: g4, L5: g5, L6: g6 };
-  const r3Badge = r3 ? resolveCiiV45BadgeR3(badgeScore, qualityGates.L6) : null;
+  // R3 awards a band only from a computed CII (Admin evidence assessed): an AI-only draft has no
+  // band, where R1/R2 capped it by the same condition (their L4/L5 gates need a computed CII).
+  const r3Badge = r3 ? resolveCiiV45BadgeR3(diag, qualityGates.L6) : null;
   const finalBadgeShape = r3
     ? r3Badge!.badge
     : resolveBadgeForScore(badgeScore, qualityGates);

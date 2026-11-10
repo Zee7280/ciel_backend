@@ -1154,4 +1154,55 @@ describe('rubric versions: R3 current, R2 and R1 kept for stored analyses', () =
       });
     });
   });
+
+  it('R3 totals equal an independent weight x factor calculation for any anchor pattern', () => {
+    const factors = [0, 0.5, 0.7, 0.85, 1];
+    let seed = 7;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed;
+    };
+    for (let run = 0; run < 40; run += 1) {
+      const anchors = new Map<string, 0 | 1 | 2 | 3 | 4>();
+      const payload = buildValidPayload(
+        {
+          sectionScores: CII_V45_DIMENSIONS.map((dim) => ({
+            dimension: dim.id,
+            criterionScores: dim.criteria.map(({ key }) => {
+              const a = (next() % 5) as 0 | 1 | 2 | 3 | 4;
+              anchors.set(`${dim.id}.${key}`, a);
+              return {
+                criterion: key,
+                anchor: a,
+                qualityAnchor: a,
+                verificationStatus:
+                  dim.id === '7'
+                    ? ('ADMIN_VERIFIED' as const)
+                    : ('AI_REPORT' as const),
+                sourceRefs: ['s1'],
+                evidenceIds: [],
+                reasoningSummary: 'r',
+              };
+            }),
+          })),
+        },
+        CII_V45_DIMENSIONS,
+      );
+      const result = computeCiiV45Result(payload);
+      let ai = 0;
+      let evidence = 0;
+      for (const dim of CII_V45_DIMENSIONS) {
+        for (const c of dim.criteria) {
+          const pts = c.weight * factors[anchors.get(`${dim.id}.${c.key}`)!];
+          if (dim.id === '7') evidence += pts;
+          else ai += pts;
+        }
+      }
+      const round1 = (n: number) => Math.round((n + 1e-9) * 10) / 10;
+      expect(result.aiReportScore).toBe(round1(ai));
+      expect(result.adminEvidenceScore).toBe(round1(evidence));
+      expect(result.finalCII).toBe(round1(ai + evidence));
+      expect(result.aiProposalScore).toBe(round1(ai));
+    }
+  });
 });

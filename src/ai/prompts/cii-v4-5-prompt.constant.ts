@@ -39,11 +39,12 @@ This separation is deliberate. Report quality is report quality; evidence qualit
 6. Use saved answers as the authoritative narrative. If \`sourceValidation\` identifies a source inconsistency, flag it in \`adminReviewReasons\`; do not invent an integrity penalty.
 7. \`anchor\` and \`qualityAnchor\` must normally be identical in v5.0 because evidence ceilings are no longer applied by the AI. A server/system verification issue may justify \`PROCESSING_REQUIRED\`, but never convert a technical issue into zero quality.
 8. Do not flag pending faculty/partner attendance verification. Logged non-rejected session hours on the report are the hours record.
-9. If the report form did not ask for the information a criterion needs and the saved narrative cannot supply it, return anchor \`P\` (pending) with \`verificationStatus\` \`PROCESSING_REQUIRED\` and say so in \`reasoningSummary\`. A pending criterion is held for the Admin: it is never converted into zero or into N/A without a justification.
+9. Always give every criterion an integer anchor 0–4. Never return \`P\` for a report-quality criterion: a pending criterion blocks its whole section and the CII, so it is reserved for an unresolved system data gap in \`sourceValidation\` (with \`verificationStatus\` \`PROCESSING_REQUIRED\`). If the saved report does not directly address a criterion, judge the closest relevant material in the saved answers. Where the report form does not collect the specific detail a criterion names (for example a dated consultation source, a de-duplication method or an unintended-effects record), that is not a student failure: a clear, sensible account that merely lacks that extra detail is Sound (2) at most, and nothing relevant at all is Missing (0). Never invent facts to fill a gap.
+10. Judge only what the CIEL PK report form can capture. Each criterion's wording names the full-mark standard, but a student can only report what the form asks. (a) If the report has a relevant answer, score that answer: a complete, credible, internally consistent answer is Strong (3) even when optional extra detail the form does not collect (exact observation dates, a de-duplication method, a stated uncertainty) is absent; Sound (2) is credible but partial; Basic (1) is thin or vague; Exceptional (4) needs real extra rigour or corroboration visible in the saved report itself. (b) If the form has no field that could capture what a criterion asks (typically: an explicit objective target or threshold for \`objectiveAttainment\`, a beneficiary/host confirmation or unintended-effects record for \`communityConfirmation\`, a finding-to-action record for \`evaluationImprovement\`, assessed work or a pre/post measure for \`competencyDevelopment\`, a dated consultation record for \`needAndVoice\`), do not punish the student for the form: score it Sound (2) and say in \`reasoningSummary\` that the form does not capture it; score above 2 only if the narrative clearly demonstrates it, and below 2 only if the narrative itself contradicts it or shows it was done badly. (c) Never invent facts to justify a mark.
 
 ## 3. Anchor ladder
 
-Use only integer anchors 0–4 (or \`P\` for a criterion the form did not ask about, see stance 9).
+Use only integer anchors 0–4 (never \`P\` for report quality, see stance 9).
 
 | Anchor | Meaning | Factor |
 |---|---|---:|
@@ -131,7 +132,7 @@ One meaningful partner can outperform five nominal partners. Do not list an orga
 - \`academicApplication\` (1): a specific disciplinary skill is connected to a delivered task and its result.
 - \`competencyDevelopment\` (1): the claimed learning is supported by work or a proportionate assessment; a self-rating is labelled as self-report and does not prove assessed attainment.
 - \`ethicalJudgement\` (1): the reflection identifies a relevant assumption, limitation or ethical decision and what the student would improve or retain.
-Honest reflection can be exceptional without sophisticated vocabulary. If the form did not ask for what a criterion needs, do not penalise it.
+Honest reflection can be exceptional without sophisticated vocabulary. Score every criterion from the saved reflection; do not return \`P\`.
 
 ### Dimension 9 — Sustainability & Handover (10)
 - \`retainedBenefits\` (2): the report explains what continues and what stops, and separates achieved continuation from an expectation or a dependency on others.

@@ -63,8 +63,38 @@ describe('CII_V4_5_EVALUATOR_PROMPT — R3 criteria', () => {
     },
   );
 
-  it('tells the model to hold a not-asked criterion pending rather than zero', () => {
-    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/anchor `P`/);
-    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/never converted into zero/);
+  it('never lets the model park a report-quality criterion as pending (a pending criterion blocks the CII)', () => {
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(
+      /Always give every criterion an integer anchor 0–4/,
+    );
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(
+      /Never return `P` for a report-quality criterion/,
+    );
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(
+      /blocks its whole section and the CII/,
+    );
+    // no instruction anywhere invites pending for "not asked" criteria
+    expect(CII_V4_5_EVALUATOR_PROMPT).not.toMatch(
+      /did not ask[^.]*return anchor `P`/i,
+    );
+    expect(CII_V4_5_EVALUATOR_PROMPT).not.toMatch(/anchor `P` \(pending\)/);
+  });
+
+  it('judges only what the report form can capture: unasked detail is neutral Sound, never a penalty or a pending hold', () => {
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(
+      /Judge only what the CIEL PK report form can capture/,
+    );
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(
+      /do not punish the student for the form: score it Sound \(2\)/,
+    );
+    for (const key of [
+      'objectiveAttainment',
+      'communityConfirmation',
+      'evaluationImprovement',
+      'competencyDevelopment',
+      'needAndVoice',
+    ]) {
+      expect(CII_V4_5_EVALUATOR_PROMPT).toContain(`\`${key}\``);
+    }
   });
 });

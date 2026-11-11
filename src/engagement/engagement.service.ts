@@ -1132,7 +1132,8 @@ export class EngagementService {
     const deptAsProgram =
       dept && !isSchoolOrInstituteAcademicLabel(dept) ? dept : '';
     const base = program || deptAsProgram;
-    const year = (p.yearOfStudy || '').trim();
+    // Community Service asks for Semester and hides Year of study (its saved value is the form default).
+    const year = (p.semester || '').trim() || (p.yearOfStudy || '').trim();
     if (base && year) return `${base} · ${year}`;
     if (base) return base;
     return year;

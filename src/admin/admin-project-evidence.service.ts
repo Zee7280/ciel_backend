@@ -180,9 +180,11 @@ export class AdminProjectEvidenceService {
       relations: ['participant'],
     });
 
-    // Sharing rule: only Public evidence can be downloaded. Restricted/Private is view-only,
-    // blocked for every role including Super Admin.
-    const downloadableReports = reports.filter((r) => canDownloadEvidence(r));
+    // Sharing rule: Public evidence downloads for everyone; Restricted/Private only for Super
+    // Admin — the only role this route serves.
+    const downloadableReports = reports.filter((r) =>
+      canDownloadEvidence(r, 'admin'),
+    );
     if (reports.length > 0 && downloadableReports.length === 0) {
       throw new ForbiddenException(
         'Evidence downloads are blocked: this project shares evidence as Restricted/Private. Only Public evidence can be downloaded.',
@@ -206,7 +208,113 @@ export class AdminProjectEvidenceService {
 
     const safeTitle = this.sanitizePathSegment(opportunity.title) || 'project';
     const filename = `${safeTitle}-${id.slice(0, 8)}-evidence.zip`;
+    await this.writeEvidenceZip(res, filename, entries);
+  }
 
+  /**
+   * One report's evidence as a ZIP for Super Admin (Impact Package "Download all evidence").
+   * `urls` is the list the package shows; only URLs found in this report's own record are
+   * fetched (and only from the platform bucket), so the request cannot pull anything else.
+   * Without `urls`, every file the report collector finds is included.
+   */
+  async streamReportEvidenceZip(
+    reportId: string,
+    urls: unknown,
+    res: Response,
+  ): Promise<void> {
+    const id = reportId?.trim();
+    if (!id) {
+      throw new BadRequestException('Report id is required');
+    }
+    const report = await this.studentReportRepository.findOne({
+      where: { id },
+      relations: ['student'],
+    });
+    if (!report) {
+      throw new NotFoundException('Report not found');
+    }
+    if (!canDownloadEvidence(report, 'admin')) {
+      throw new ForbiddenException('Evidence downloads are blocked.');
+    }
+
+    const collected = collectReportEvidenceFiles(report);
+    const named = new Map(collected.map((file) => [file.url, file.name]));
+    const record = JSON.stringify(report);
+    const projectId = report.opportunityId || report.project_id;
+    // Session evidence the package shows from the live attendance table (same project only).
+    const attendanceUrls = new Set(
+      projectId
+        ? (
+            await this.attendanceLogRepository.find({
+              where: { projectId, evidenceUrl: Not(IsNull()) },
+              select: ['id', 'evidenceUrl'],
+            })
+          )
+            .map((log) => log.evidenceUrl?.trim())
+            .filter((u): u is string => Boolean(u))
+        : [],
+    );
+    const asked = Array.isArray(urls)
+      ? [
+          ...new Set(
+            urls
+              .filter((u): u is string => typeof u === 'string')
+              .map((u) => u.trim())
+              .filter((u) => /^https?:\/\//i.test(u)),
+          ),
+        ]
+      : [];
+    const requested = asked.filter(
+      (u) => record.includes(u) || attendanceUrls.has(u),
+    );
+    const list = [
+      ...new Set(
+        requested.length ? requested : collected.map((file) => file.url),
+      ),
+    ];
+    res.setHeader(
+      'X-Evidence-Not-In-Record',
+      String(requested.length ? asked.length - requested.length : 0),
+    );
+    if (list.length === 0) {
+      throw new NotFoundException('No evidence files found for this report');
+    }
+    if (list.length > MAX_FILES_PER_ZIP) {
+      throw new BadRequestException(
+        `Too many evidence files (${list.length}). Maximum ${MAX_FILES_PER_ZIP} per download.`,
+      );
+    }
+
+    const opportunity = projectId
+      ? await this.opportunityRepository.findOne({
+          where: { id: projectId },
+          select: ['id', 'title'],
+        })
+      : null;
+    const title =
+      this.sanitizePathSegment(opportunity?.title || '') || 'report';
+    const pad = String(list.length).length;
+    const entries = list.map((url, index) => {
+      const raw = named.get(url) || this.fileNameFromUrl(url) || 'evidence';
+      const name = this.sanitizePathSegment(raw) || 'evidence';
+      return {
+        url,
+        zipPath: `${title}/${String(index + 1).padStart(pad, '0')}_${name}`,
+      };
+    });
+    await this.writeEvidenceZip(
+      res,
+      `${title}-${id.slice(0, 8)}-evidence.zip`,
+      entries,
+    );
+  }
+
+  /** Fetches each file from the bucket and streams them as one ZIP (skipped files noted inside). */
+  private async writeEvidenceZip(
+    res: Response,
+    filename: string,
+    entries: Array<{ url: string; zipPath: string }>,
+  ): Promise<void> {
     // Download first so the skipped count is known before headers are sent.
     const downloadedEntries: Array<{ zipPath: string; buffer: Buffer }> = [];
     let skipped = 0;
@@ -236,7 +344,7 @@ export class AdminProjectEvidenceService {
     res.setHeader('X-Evidence-Skipped', String(skipped));
     res.setHeader(
       'Access-Control-Expose-Headers',
-      'X-Evidence-Skipped, Content-Disposition',
+      'X-Evidence-Skipped, X-Evidence-Not-In-Record, Content-Disposition',
     );
 
     const archive = archiver('zip', { zlib: { level: 6 } });
@@ -336,6 +444,15 @@ export class AdminProjectEvidenceService {
     }
 
     return Array.from(map.values());
+  }
+
+  private fileNameFromUrl(url: string): string {
+    const last = url.split('?')[0].split('#')[0].split('/').pop() || '';
+    try {
+      return decodeURIComponent(last);
+    } catch {
+      return last;
+    }
   }
 
   private studentFolderLabel(report: StudentReport): string {

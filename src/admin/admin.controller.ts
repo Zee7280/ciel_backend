@@ -34,6 +34,7 @@ import { SetSettingDto } from './dto/set-setting.dto';
 import { AdminReasonDto } from './dto/admin-reason.dto';
 import { AdminReportVerifyDto } from './dto/admin-report-verify.dto';
 import { RemindZeroHoursDto } from './dto/remind-zero-hours.dto';
+import { ReportEvidenceDownloadDto } from './dto/report-evidence-download.dto';
 import { AuthService } from '../auth/auth.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
@@ -231,6 +232,20 @@ export class AdminController {
   ) {
     return this.adminProjectEvidenceService.streamProjectEvidenceZip(
       opportunityId,
+      res,
+    );
+  }
+
+  /** Super Admin: one report's evidence originals as a ZIP (Impact Package "Download all"). */
+  @Post('reports/:id/evidence/download')
+  downloadReportEvidence(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: ReportEvidenceDownloadDto,
+    @Res() res: Response,
+  ) {
+    return this.adminProjectEvidenceService.streamReportEvidenceZip(
+      id,
+      body?.urls,
       res,
     );
   }

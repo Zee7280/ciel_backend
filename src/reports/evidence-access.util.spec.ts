@@ -43,6 +43,18 @@ describe('evidence access matrix', () => {
     expect(canViewEvidence(approved, 'partner')).toBe(false);
     expect(canViewEvidence(approved, 'public')).toBe(false);
     expect(canDownloadEvidence(approved)).toBe(false);
+    for (const role of [
+      'student',
+      'faculty',
+      'university',
+      'partner',
+      'public',
+    ] as const) {
+      expect(canDownloadEvidence(approved, role)).toBe(false);
+    }
+    // Super Admin may download restricted / private originals.
+    expect(canDownloadEvidence(pending, 'admin')).toBe(true);
+    expect(canDownloadEvidence(approved, 'admin')).toBe(true);
   });
 
   it('public: everyone views and downloads', () => {

@@ -10,9 +10,10 @@ import {
  *
  *  - public:     anyone views (student, NGO, partner, faculty, university, admin, public);
  *                originals downloadable. Needs the public-share permission, otherwise restricted.
- *  - restricted / private: Student, Super Admin, Faculty and University may view (read-only).
+ *  - restricted / private: Student, Super Admin, Faculty and University may view.
  *                Partner / NGO / public never see the files. Never shown publicly.
- *                Downloads blocked for every role, Super Admin included.
+ *                Only Super Admin may download the originals (review / record keeping);
+ *                every other role is view-only.
  */
 export type EvidenceViewerRole =
   | 'student'
@@ -58,8 +59,15 @@ export function canViewEvidence(
   return false;
 }
 
-/** Downloads exist only for public evidence; restricted/private is blocked for all roles. */
-export function canDownloadEvidence(report: { section8?: unknown }): boolean {
+/**
+ * Public evidence: anyone may download. Restricted / private: Super Admin only.
+ * Without a role, only public evidence is downloadable.
+ */
+export function canDownloadEvidence(
+  report: { section8?: unknown },
+  role?: EvidenceViewerRole,
+): boolean {
+  if (role === 'admin') return true;
   return effectiveEvidenceVisibility(report.section8) === 'public';
 }
 
@@ -105,7 +113,7 @@ export function applyEvidenceAccess<
   const access = {
     visibility,
     can_view: allowed,
-    can_download: canDownloadEvidence({ section8: data.section8 }),
+    can_download: canDownloadEvidence({ section8: data.section8 }, role),
     message: allowed ? null : 'Evidence verified — not publicly available',
   };
   if (allowed) {

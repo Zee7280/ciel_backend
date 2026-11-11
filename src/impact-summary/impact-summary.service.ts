@@ -16,6 +16,7 @@ import {
   VENTURE_VISIBILITY_THRESHOLD,
 } from '../paths/venture-completeness.constants';
 import { computeVentureGates } from '../paths/venture-gates.util';
+import { StudentReportsService } from '../reports/student-reports.service';
 
 const WORKING_PARTICIPATION_STATUSES = [
   'approved',
@@ -23,6 +24,16 @@ const WORKING_PARTICIPATION_STATUSES = [
   'paid',
   'accepted',
 ] as const;
+
+/** Community Service stages per engagement (dashboard progress bar + overall completion). */
+const CS_STAGE_PENDING = 10;
+const CS_STAGE_JOINED = 25;
+const CS_STAGE_LOGGING = 50;
+const CS_STAGE_SUBMITTED = 75;
+const CS_STAGE_APPROVED = 100;
+
+/** Reports this student belongs to (lead or teammate), grouped by project. */
+type ReportProjects = { approved: Set<string>; submitted: Set<string> };
 
 /** Must match the frontend Course Project wizard's STEPS.length (course-project/[id]/page.tsx). */
 const COURSE_PROJECT_TOTAL_STEPS = 8;
@@ -59,18 +70,18 @@ export class ImpactSummaryService {
     private readonly fypRepo: Repository<FypEntry>,
     @InjectRepository(VentureEntry)
     private readonly ventureRepo: Repository<VentureEntry>,
+    private readonly studentReportsService: StudentReportsService,
   ) {}
 
   async getSummary(userId: string) {
+    const reportProjects = await this.reportProjectsForStudent(userId);
     const [
-      verifiedHours,
-      pendingHours,
+      { verifiedHours, pendingHours },
       activeEngagements,
       compositeScore,
       pathsStatus,
     ] = await Promise.all([
-      this.sumHoursByStatus(userId, 'verified'),
-      this.sumHoursByStatus(userId, 'pending'),
+      this.sumHours(userId, reportProjects.approved),
       this.participationRepo.count({
         where: {
           studentId: userId,
@@ -78,7 +89,7 @@ export class ImpactSummaryService {
         },
       }),
       this.averageReportScore(userId),
-      this.getPathsStatus(userId),
+      this.getPathsStatus(userId, reportProjects),
     ]);
 
     return {
@@ -92,18 +103,135 @@ export class ImpactSummaryService {
     };
   }
 
-  private async sumHoursByStatus(
+  /**
+   * Admin-approved (verified / paid) reports and other submitted reports this student is on —
+   * as lead or as a teammate — keyed by project id. Best effort: a lookup failure only means
+   * hours and progress fall back to the attendance-only figures.
+   */
+  private async reportProjectsForStudent(
     userId: string,
-    entryStatus: 'verified' | 'pending',
-  ) {
+  ): Promise<ReportProjects> {
+    const approved = new Set<string>();
+    const submitted = new Set<string>();
+    let reports: StudentReport[] = [];
+    try {
+      reports =
+        await this.studentReportsService.getMergedReportsForParticipant(userId);
+    } catch {
+      reports = [];
+    }
+    for (const report of reports) {
+      const key = String(
+        report.opportunityId || report.project_id || '',
+      ).trim();
+      if (!key) continue;
+      if (
+        report.admin_status === 'approved' &&
+        report.faculty_status !== 'rejected' &&
+        ['verified', 'paid'].includes(String(report.status))
+      ) {
+        approved.add(key);
+      } else if (report.status && report.status !== 'draft') {
+        submitted.add(key);
+      }
+    }
+    for (const key of approved) submitted.delete(key);
+    return { approved, submitted };
+  }
+
+  /**
+   * Verified hours: sessions faculty verified, plus every non-rejected session on a project whose
+   * report CIEL PK approved (approving the report verifies its logged hours — the same total the
+   * certificate shows). Pending hours: the rest still waiting, rejected sessions excluded.
+   */
+  private async sumHours(
+    userId: string,
+    approvedProjectIds: Set<string>,
+  ): Promise<{ verifiedHours: number; pendingHours: number }> {
+    const approvedIds = [...approvedProjectIds];
+    const inApproved = approvedIds.length
+      ? `(log.projectId IN (:...approvedIds) AND COALESCE(log.approvalStatus, '') <> 'rejected')`
+      : 'FALSE';
     const raw = await this.attendanceLogRepo
       .createQueryBuilder('log')
       .innerJoin('log.participant', 'p')
       .where('p.studentId = :userId', { userId })
-      .andWhere('log.entryStatus = :entryStatus', { entryStatus })
-      .select('SUM(log.sessionHours)', 'total')
-      .getRawOne<{ total: string | null }>();
-    return Number(raw?.total ?? 0);
+      .select(
+        `SUM(CASE WHEN log.entryStatus = 'verified' OR ${inApproved} THEN log.sessionHours ELSE 0 END)`,
+        'verified',
+      )
+      .addSelect(
+        `SUM(CASE WHEN log.entryStatus = 'pending' AND NOT (${inApproved}) AND COALESCE(log.approvalStatus, '') <> 'rejected' THEN log.sessionHours ELSE 0 END)`,
+        'pending',
+      )
+      .setParameters(approvedIds.length ? { approvedIds } : {})
+      .getRawOne<{ verified: string | null; pending: string | null }>();
+    return {
+      verifiedHours: Number(raw?.verified ?? 0) || 0,
+      pendingHours: Number(raw?.pending ?? 0) || 0,
+    };
+  }
+
+  /**
+   * Community Service progress: each engagement counts by stage (awaiting approval 10, joined 25,
+   * hours logged 50, report submitted 75, report approved 100); the path shows their average.
+   */
+  private communityServicePathStatus(
+    participations: Array<Pick<Participation, 'id' | 'projectId' | 'status'>>,
+    loggedParticipationIds: Set<string>,
+    reports: ReportProjects,
+    unsentAttendanceCount: number,
+  ): PathStatusEntry {
+    const live = participations.filter((p) => p.status !== 'rejected');
+    if (live.length === 0) {
+      return {
+        state: 'not_started',
+        needsAction: unsentAttendanceCount > 0,
+        progress: 0,
+        detail: 'No engagements yet',
+      };
+    }
+    // One stage per project: a student can hold sibling seats on the same project.
+    const stageByProject = new Map<string, number>();
+    for (const p of live) {
+      const project = String(p.projectId || p.id);
+      const working =
+        (WORKING_PARTICIPATION_STATUSES as readonly string[]).includes(
+          p.status,
+        ) || p.status === 'finalized';
+      const stage = reports.approved.has(project)
+        ? CS_STAGE_APPROVED
+        : reports.submitted.has(project)
+          ? CS_STAGE_SUBMITTED
+          : loggedParticipationIds.has(p.id)
+            ? CS_STAGE_LOGGING
+            : working
+              ? CS_STAGE_JOINED
+              : CS_STAGE_PENDING;
+      stageByProject.set(
+        project,
+        Math.max(stageByProject.get(project) ?? 0, stage),
+      );
+    }
+    const stages = [...stageByProject.values()];
+    const progress = Math.round(
+      stages.reduce((sum, stage) => sum + stage, 0) / stages.length,
+    );
+    const approvedCount = stages.filter((s) => s === CS_STAGE_APPROVED).length;
+    const activeCount = stages.length - approvedCount;
+    const plural = (n: number, word: string) =>
+      `${n} ${word}${n === 1 ? '' : 's'}`;
+    return {
+      state: activeCount === 0 ? 'complete' : 'active',
+      needsAction: unsentAttendanceCount > 0,
+      progress,
+      detail:
+        approvedCount && activeCount
+          ? `${plural(approvedCount, 'approved report')} · ${plural(activeCount, 'active engagement')}`
+          : approvedCount
+            ? plural(approvedCount, 'approved report')
+            : plural(activeCount, 'active engagement'),
+    };
   }
 
   private async averageReportScore(userId: string): Promise<number> {
@@ -172,15 +300,28 @@ export class ImpactSummaryService {
 
   private async getPathsStatus(
     userId: string,
+    reports: ReportProjects,
   ): Promise<Record<string, PathStatusEntry>> {
     const [
-      communityServiceCount,
+      participations,
+      loggedRows,
       unsentAttendanceCount,
       courseProjects,
       fyp,
       venture,
     ] = await Promise.all([
-      this.participationRepo.count({ where: { studentId: userId } }),
+      this.participationRepo.find({
+        where: { studentId: userId },
+        select: ['id', 'projectId', 'status'],
+      }),
+      this.attendanceLogRepo
+        .createQueryBuilder('log')
+        .innerJoin('log.participant', 'p')
+        .where('p.studentId = :userId', { userId })
+        .andWhere("COALESCE(log.approvalStatus, '') <> 'rejected'")
+        .select('log.participantId', 'participantId')
+        .groupBy('log.participantId')
+        .getRawMany<{ participantId: string }>(),
       this.attendanceLogRepo
         .createQueryBuilder('log')
         .innerJoin('log.participant', 'p')
@@ -200,15 +341,12 @@ export class ImpactSummaryService {
     ]);
 
     return {
-      communityService: {
-        state: communityServiceCount > 0 ? 'active' : 'not_started',
-        needsAction: unsentAttendanceCount > 0,
-        progress: Math.min(100, communityServiceCount * 25),
-        detail:
-          communityServiceCount > 0
-            ? `${communityServiceCount} active engagement${communityServiceCount === 1 ? '' : 's'}`
-            : 'No engagements yet',
-      },
+      communityService: this.communityServicePathStatus(
+        participations,
+        new Set(loggedRows.map((row) => String(row.participantId))),
+        reports,
+        unsentAttendanceCount,
+      ),
       courseProject: this.courseProjectPathStatus(courseProjects),
       fypThesis: this.fypThesisPathStatus(fyp),
       startupBusiness: this.startupBusinessPathStatus(venture),

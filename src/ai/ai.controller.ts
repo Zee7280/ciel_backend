@@ -20,11 +20,17 @@ import { SummarizeAiDto } from './dto/summarize-ai.dto';
 import { OpportunityDraftDto } from './dto/opportunity-draft.dto';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 
-/** Roles that create opportunities through the guided wizard and may ask AI for a draft. */
+/**
+ * Roles that create opportunities through a guided wizard and may ask AI for a draft: the student
+ * form, the faculty form (also Super Admin), and the partner form (NGO / university / corporate).
+ */
 const OPPORTUNITY_DRAFT_ROLES = new Set<UserRole | undefined>([
   UserRole.STUDENT,
   UserRole.FACULTY,
   UserRole.SUPER_ADMIN,
+  UserRole.NGO,
+  UserRole.UNIVERSITY,
+  UserRole.CORPORATE,
 ]);
 
 /**

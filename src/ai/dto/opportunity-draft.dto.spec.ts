@@ -30,7 +30,17 @@ describe('OpportunityDraftDto', () => {
     expect(dto.faculty_email).toBeUndefined();
   });
 
+  it.each(['university', 'private', 'faculty', 'organization'])(
+    'accepts creator_pathway %s',
+    async (creator_pathway) => {
+      await expect(
+        pipe.transform({ idea: 'tree plantation', creator_pathway }, metadata),
+      ).resolves.toMatchObject({ creator_pathway });
+    },
+  );
+
   it.each([
+    [{ idea: 'tree plantation', creator_pathway: 'admin' }],
     [{ idea: 'ab' }],
     [{ idea: 'x'.repeat(4001) }],
     [{ idea: 'tree plantation', seats: 0 }],

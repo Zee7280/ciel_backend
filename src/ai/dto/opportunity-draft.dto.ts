@@ -11,6 +11,10 @@ import {
   MinLength,
 } from 'class-validator';
 import { TEAM_MODES, type TeamMode } from '../../opportunities/team-mode.util';
+import {
+  OPPORTUNITY_DRAFT_CREATOR_PATHWAYS,
+  type OpportunityDraftCreatorPathway,
+} from '../opportunity-draft.util';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -67,6 +71,6 @@ export class OpportunityDraftDto {
   end_date?: string;
 
   @IsOptional()
-  @IsIn(['university', 'private'])
-  creator_pathway?: 'university' | 'private';
+  @IsIn(OPPORTUNITY_DRAFT_CREATOR_PATHWAYS)
+  creator_pathway?: OpportunityDraftCreatorPathway;
 }

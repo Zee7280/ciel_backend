@@ -76,9 +76,16 @@ describe('AiController.opportunityDraft — roles and feature flag', () => {
   const as = (role: string) => ({ user: { id: 'u1', role: role as UserRole } });
   const body = { idea: 'tree plantation' };
 
-  it('drafts for students, faculty and admin when the flag is on', async () => {
+  it('drafts for every opportunity-creating role when the flag is on', async () => {
     const { ai, controller } = make(true);
-    for (const role of ['student', 'faculty', 'admin']) {
+    for (const role of [
+      'student',
+      'faculty',
+      'admin',
+      'ngo',
+      'university',
+      'corporate',
+    ]) {
       await expect(
         controller.opportunityDraft(as(role), body),
       ).resolves.toEqual({ success: true, data: draft });
@@ -88,7 +95,7 @@ describe('AiController.opportunityDraft — roles and feature flag', () => {
 
   it('refuses other roles', async () => {
     const { ai, controller } = make(true);
-    for (const role of ['ngo', 'university', 'corporate']) {
+    for (const role of ['investor', 'organization_admin', '']) {
       await expect(
         controller.opportunityDraft(as(role), body),
       ).rejects.toBeInstanceOf(ForbiddenException);

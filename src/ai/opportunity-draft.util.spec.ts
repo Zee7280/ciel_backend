@@ -68,6 +68,30 @@ describe('buildOpportunityDraftPrompt', () => {
     expect(prompt).toContain('open opportunity');
     expect(prompt).toContain('Total places: not given');
     expect(prompt).toContain('Main partner organisation: none named');
+    expect(prompt).toContain('- Creator: university-linked student');
+  });
+
+  it('names faculty and partner-organisation creators', () => {
+    expect(
+      buildOpportunityDraftPrompt({
+        idea: 'tree plantation',
+        creator_pathway: 'faculty',
+      }),
+    ).toContain(
+      '- Creator: faculty member (academic lead) posting for students',
+    );
+    expect(
+      buildOpportunityDraftPrompt({
+        idea: 'tree plantation',
+        creator_pathway: 'organization',
+      }),
+    ).toContain('- Creator: partner organisation (NGO / university / company)');
+    expect(
+      buildOpportunityDraftPrompt({
+        idea: 'tree plantation',
+        creator_pathway: 'private',
+      }),
+    ).toContain('- Creator: private / independent student');
   });
 });
 

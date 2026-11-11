@@ -90,8 +90,31 @@ export type OpportunityDraftInput = {
   main_partner?: string;
   start_date?: string;
   end_date?: string;
-  creator_pathway?: 'university' | 'private';
+  creator_pathway?: OpportunityDraftCreatorPathway;
 };
+
+/** Who fills the form: a student (university-linked or private), a faculty member, or a partner organisation. */
+export const OPPORTUNITY_DRAFT_CREATOR_PATHWAYS = [
+  'university',
+  'private',
+  'faculty',
+  'organization',
+] as const;
+export type OpportunityDraftCreatorPathway =
+  (typeof OPPORTUNITY_DRAFT_CREATOR_PATHWAYS)[number];
+
+function creatorLine(pathway: OpportunityDraftCreatorPathway | undefined) {
+  switch (pathway) {
+    case 'private':
+      return 'private / independent student';
+    case 'faculty':
+      return 'faculty member (academic lead) posting for students; write student-facing text, not about the faculty member';
+    case 'organization':
+      return 'partner organisation (NGO / university / company) posting for students; write student-facing text';
+    default:
+      return 'university-linked student';
+  }
+}
 
 export type OpportunityDraftSdg = {
   sdg_id: string;
@@ -143,7 +166,7 @@ export function buildOpportunityDraftPrompt(
     ...sdgCatalogPromptLines(),
     '',
     'Fixed facts from the student (do not change them):',
-    `- Creator: ${input.creator_pathway === 'private' ? 'private / independent student' : 'university-linked student'}`,
+    `- Creator: ${creatorLine(input.creator_pathway)}`,
     `- Who can join: ${
       mode === 'private_team'
         ? `private team of up to ${Math.min(seats ?? PRIVATE_TEAM_MAX_SEATS, PRIVATE_TEAM_MAX_SEATS)} students including the creator; nobody else applies`

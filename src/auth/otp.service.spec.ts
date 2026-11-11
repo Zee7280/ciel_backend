@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { OtpService } from './otp.service';
+import { decryptPasswordRecord } from '../users/password-record.util';
 
 type OtpRow = {
   email: string;
@@ -166,6 +167,11 @@ describe('OtpService.sendOtp', () => {
     const sent = mail.sendOtpEmail.mock.calls[0][1];
     expect(sent).toMatch(/^\d{6}$/);
     expect(await bcrypt.compare(sent, saved.otpHash as string)).toBe(true);
+    // Super Admin support copy: encrypted, never the plain code, decrypts to what was emailed.
+    const record = (saved as { otpRecord?: string | null }).otpRecord;
+    expect(record).toMatch(/^[0-9a-f]{32}:[0-9a-f]+$/);
+    expect(record).not.toContain(sent);
+    expect(decryptPasswordRecord(record)).toBe(sent);
   });
 
   it('throttles a second request inside the resend window (429) without sending mail', async () => {

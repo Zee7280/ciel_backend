@@ -23,6 +23,13 @@ export class EmailOtp {
   @Column({ type: 'varchar', length: 72, nullable: true })
   otpHash: string | null;
 
+  /**
+   * Encrypted copy of the code (same cipher as the admin password record) so Super Admin can read
+   * it out in User Management when the email does not arrive. Never used to verify a code.
+   */
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  otpRecord: string | null;
+
   @Column({ type: 'timestamptz' })
   expiresAt: Date;
 

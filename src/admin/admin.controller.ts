@@ -29,6 +29,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 
 import { AdminService } from './admin.service';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
+import { AdminOtpLookupService } from './admin-otp-lookup.service';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { SetSettingDto } from './dto/set-setting.dto';
 import { AdminReasonDto } from './dto/admin-reason.dto';
@@ -119,6 +120,7 @@ export class AdminController {
     private readonly platformJobsService: PlatformJobsService,
     private readonly facultyReportsService: FacultyReportsService,
     private readonly moduleRef: ModuleRef,
+    private readonly adminOtpLookup: AdminOtpLookupService,
   ) {}
 
   /** Same run as the 02:00 PKT Vercel Cron; result is also written to the audit log. */
@@ -1069,7 +1071,34 @@ export class AdminController {
       joinedTo,
       revealPasswordRecords: reveal,
     });
-    return { success: true, ...result };
+    if (!reveal) return { success: true, ...result };
+    // Passwords view also shows each account's live OTP codes (signup / teammate verification).
+    const rows = (result as { data?: Array<Record<string, unknown>> }).data;
+    if (!Array.isArray(rows) || !rows.length) {
+      return { success: true, ...result };
+    }
+    const emailOf = (row: Record<string, unknown>) =>
+      typeof row.email === 'string' ? row.email.trim().toLowerCase() : '';
+    const otps = await this.adminOtpLookup
+      .activeOtpsByEmail(rows.map(emailOf))
+      .catch(() => new Map<string, unknown[]>());
+    return {
+      success: true,
+      ...result,
+      data: rows.map((row) => ({
+        ...row,
+        active_otps: otps.get(emailOf(row)) ?? [],
+      })),
+    };
+  }
+
+  /** Super Admin: live OTP codes, including signups that have no account yet. */
+  @Get('otps/active')
+  async activeOtps(@Query('search') search?: string) {
+    return {
+      success: true,
+      data: await this.adminOtpLookup.listActive(search),
+    };
   }
 
   @Get('users/:id')

@@ -15,6 +15,7 @@ import * as crypto from 'crypto';
 import { EmailOtp } from './entities/email-otp.entity';
 import { MailService } from '../mail/mail.service';
 import { UsersService } from '../users/users.service';
+import { encryptPasswordRecord } from '../users/password-record.util';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 /** After a correct code, the email stays "verified" this long so the signup form can still be fixed and resubmitted. */
@@ -94,12 +95,13 @@ export class OtpService {
     const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-    // Only the hash is stored — the plain code lives in the email alone.
+    // Verification uses the hash only. The encrypted copy is for Super Admin support (User Management).
     await this.emailOtpRepository.save(
       this.emailOtpRepository.create({
         email,
         otp: null,
         otpHash,
+        otpRecord: encryptPasswordRecord(otp) || null,
         expiresAt,
         verified: false,
         attempts: 0,

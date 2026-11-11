@@ -28,6 +28,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
 import { FacultyModule } from '../faculty/faculty.module';
 import { NpeRankingModule } from '../ranking/npe-ranking.module';
+import { EmailOtp } from '../auth/entities/email-otp.entity';
+import { Otp } from '../students/entities/otp.entity';
+import { AdminOtpLookupService } from './admin-otp-lookup.service';
 
 @Module({
   imports: [
@@ -56,9 +59,11 @@ import { NpeRankingModule } from '../ranking/npe-ranking.module';
       Participation,
       OpportunityApplication,
       AttendanceLog,
+      EmailOtp,
+      Otp,
     ]),
   ],
   controllers: [AdminController, PublicConfigController],
-  providers: [AdminService, AdminProjectEvidenceService],
+  providers: [AdminService, AdminProjectEvidenceService, AdminOtpLookupService],
 })
 export class AdminModule {}

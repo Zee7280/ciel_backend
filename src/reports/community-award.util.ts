@@ -250,6 +250,30 @@ export function resolveReportFlashHours(
   return blob > 0 ? blob : pickFlashNumber(liveHours);
 }
 
+/**
+ * Hours every screen shows for a report (wall, lists, flashcard, certificate, dossiers, analytics).
+ * The stored `metrics.total_verified_hours` is an approved-only recount, so it can be lower than the
+ * non-rejected hours the students logged: the larger of the two is shown. Award scoring keeps
+ * {@link resolveReportFlashHours} unchanged.
+ */
+export function resolveReportDisplayHours(
+  section1: ReportFlashSource['section1'],
+  liveHours = 0,
+): number {
+  const metricHours = pickFlashNumber(section1?.metrics?.total_verified_hours);
+  const logs = Array.isArray(section1?.attendance_logs)
+    ? section1.attendance_logs
+    : [];
+  const logHours = logs
+    .filter(
+      (log) => log && typeof log === 'object' && logCountsTowardHours(log),
+    )
+    .reduce((sum, log) => sum + effectiveHoursFromLog(log), 0);
+  const logged = Math.max(metricHours, logHours);
+  if (logged > 0) return logged;
+  return resolveReportFlashHours(section1, liveHours);
+}
+
 function finiteCii(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (

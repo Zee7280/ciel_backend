@@ -79,6 +79,10 @@ import {
   resolveAttendanceUnlockStatus,
   resolveParticipationForAttendanceUnlock,
 } from '../engagement/attendance-unlock.util';
+import {
+  resolveReportDisplayHours,
+  type ReportFlashSource,
+} from '../reports/community-award.util';
 import { FeedbackService } from '../feedback/feedback.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -1453,27 +1457,40 @@ export class AdminService {
     const section1 = report.section1 as
       | {
           metrics?: { total_verified_hours?: unknown };
-          attendance_logs?: Array<{ hours?: unknown }>;
+          attendance_logs?: Array<{
+            hours?: unknown;
+            approval_status?: unknown;
+            approvalStatus?: unknown;
+          }>;
           team_lead?: { hours?: unknown };
         }
       | undefined;
     const section4 = report.section4 as { my_hours?: unknown } | undefined;
 
-    const metricHours = this.toAnalyticsNumber(
-      section1?.metrics?.total_verified_hours,
-    );
-    if (metricHours && metricHours > 0) {
-      return metricHours;
-    }
-
-    const attendanceHours = Array.isArray(section1?.attendance_logs)
-      ? section1.attendance_logs.reduce(
-          (sum, log) => sum + (this.toAnalyticsNumber(log?.hours) ?? 0),
-          0,
-        )
+    // Same hours the wall, flashcard and certificate show: the larger of the stored
+    // (approved-only) count and the non-rejected logged hours.
+    // Logs sometimes store text such as "3.5 hours"; read them leniently too (rejected excluded).
+    const lenientLogHours = Array.isArray(section1?.attendance_logs)
+      ? section1.attendance_logs
+          .filter(
+            (log) =>
+              String(
+                (log?.approval_status ?? log?.approvalStatus ?? '') as string,
+              )
+                .trim()
+                .toLowerCase() !== 'rejected',
+          )
+          .reduce(
+            (sum, log) => sum + (this.toAnalyticsNumber(log?.hours) ?? 0),
+            0,
+          )
       : 0;
-    if (attendanceHours > 0) {
-      return attendanceHours;
+    const shownHours = Math.max(
+      resolveReportDisplayHours(section1 as ReportFlashSource['section1']),
+      lenientLogHours,
+    );
+    if (shownHours > 0) {
+      return shownHours;
     }
 
     return (

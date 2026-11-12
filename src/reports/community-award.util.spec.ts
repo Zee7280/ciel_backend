@@ -9,6 +9,7 @@ import {
   resolveDisplayCii,
   resolveReportFlashEvidence,
   resolveReportFlashHours,
+  resolveReportDisplayHours,
   resolveReportFlashOutcomes,
   resolveReportFlashSessions,
   scoreCommunityAward,
@@ -411,5 +412,48 @@ describe('resolveReportFlashSessions / outcomes — same sources as the V23 flas
         },
       }).hasMeasuredChange,
     ).toBe(true);
+  });
+});
+
+describe('resolveReportDisplayHours — what every screen shows', () => {
+  // 20 sessions × 4 h: 12 approved (48 h stored as the approved-only recount), 8 pending.
+  const logs = Array.from({ length: 20 }, (_, i) => ({
+    hours: 4,
+    approval_status: i < 12 ? 'approved' : 'pending',
+  }));
+
+  it('shows the non-rejected logged hours when the stored count is lower', () => {
+    expect(
+      resolveReportDisplayHours({
+        metrics: { total_verified_hours: 48 },
+        attendance_logs: logs,
+      }),
+    ).toBe(80);
+    // Award scoring keeps the stored-first cascade.
+    expect(
+      resolveReportFlashHours({
+        metrics: { total_verified_hours: 48 },
+        attendance_logs: logs,
+      }),
+    ).toBe(48);
+  });
+
+  it('keeps a higher stored count, skips rejected sessions, falls back like the flash cascade', () => {
+    expect(
+      resolveReportDisplayHours({
+        metrics: { total_verified_hours: 96 },
+        attendance_logs: logs,
+      }),
+    ).toBe(96);
+    expect(
+      resolveReportDisplayHours({
+        attendance_logs: [
+          { hours: 5, approval_status: 'rejected' },
+          { hours: 3, approval_status: 'pending' },
+        ],
+      }),
+    ).toBe(3);
+    expect(resolveReportDisplayHours({ team_lead: { hours: 16 } })).toBe(16);
+    expect(resolveReportDisplayHours({}, 12)).toBe(12);
   });
 });

@@ -11,6 +11,7 @@ import {
   awardTopN,
   scoreCommunityAward,
   communityAwardInputsFromReport,
+  resolveReportDisplayHours,
   resolveDisplayCii,
   resolveReportFlashOutcomes,
   isCommunityAwardMedalReport,
@@ -84,7 +85,8 @@ export class CommunityAwardService {
     const s5 = report.section5 as StudentReport['section5'] | null;
     const lead = s1?.team_lead;
     const scoredInput = communityAwardInputsFromReport(report);
-    const hours = scoredInput.hours;
+    // Shown hours follow the wall / flashcard / certificate rule; the award score keeps its own input.
+    const hours = resolveReportDisplayHours(report.section1, scoredInput.hours);
     const evidenceCount = scoredInput.evidenceCount;
     const scored = scoreCommunityAward(scoredInput);
     const { baseline, endline, change } = resolveReportFlashOutcomes(s5);

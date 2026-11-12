@@ -521,6 +521,39 @@ describe('StudentsService impact history', () => {
     );
   });
 
+  it('certified hours: an approved-only stored count lower than the logged hours does not win', async () => {
+    const now = new Date();
+    const logs = Array.from({ length: 20 }, (_, i) => ({
+      hours: 4,
+      approval_status: i < 12 ? 'approved' : 'pending',
+    }));
+    const service = makeService({
+      studentReportsRepository: {
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 'report-binit',
+            studentId: 'student-1',
+            opportunityId: 'project-binit',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'approved',
+            submission_date: now,
+            createdAt: now,
+            opportunity: { requiresPartnerApproval: false },
+            section1: {
+              metrics: { total_verified_hours: 48 },
+              attendance_logs: logs,
+            },
+          },
+        ]),
+      },
+    });
+
+    const result = await service.getImpactHistory('student-1', 'student');
+
+    expect(result.data.total_hours).toBe(80);
+  });
+
   it('uses under-review report hours as pending when no pending timesheet exists', async () => {
     const now = new Date();
     const service = makeService({

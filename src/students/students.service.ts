@@ -93,6 +93,8 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import {
   isCommunityAwardMedalReport,
   resolveDisplayCii,
+  resolveReportDisplayHours,
+  type ReportFlashSource,
 } from '../reports/community-award.util';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
@@ -3309,27 +3311,37 @@ export class StudentsService {
     const section1 = report.section1 as
       | {
           metrics?: { total_verified_hours?: unknown };
-          attendance_logs?: Array<{ hours?: unknown }>;
+          attendance_logs?: Array<{
+            hours?: unknown;
+            approval_status?: unknown;
+            approvalStatus?: unknown;
+          }>;
           team_lead?: { hours?: unknown };
         }
       | undefined;
     const section4 = report.section4 as { my_hours?: unknown } | undefined;
 
-    const metricHours = this.toImpactNumber(
-      section1?.metrics?.total_verified_hours,
-    );
-    if (metricHours && metricHours > 0) {
-      return metricHours;
-    }
-
-    const attendanceHours = Array.isArray(section1?.attendance_logs)
-      ? section1.attendance_logs.reduce(
-          (sum, log) => sum + (this.toImpactNumber(log?.hours) ?? 0),
-          0,
-        )
+    // Same hours the wall, flashcard and certificate show: the larger of the stored
+    // (approved-only) count and the non-rejected logged hours.
+    // Logs sometimes store text such as "3.5 hours"; read them leniently too (rejected excluded).
+    const lenientLogHours = Array.isArray(section1?.attendance_logs)
+      ? section1.attendance_logs
+          .filter(
+            (log) =>
+              String(
+                (log?.approval_status ?? log?.approvalStatus ?? '') as string,
+              )
+                .trim()
+                .toLowerCase() !== 'rejected',
+          )
+          .reduce((sum, log) => sum + (this.toImpactNumber(log?.hours) ?? 0), 0)
       : 0;
-    if (attendanceHours > 0) {
-      return attendanceHours;
+    const shownHours = Math.max(
+      resolveReportDisplayHours(section1 as ReportFlashSource['section1']),
+      lenientLogHours,
+    );
+    if (shownHours > 0) {
+      return shownHours;
     }
 
     return (

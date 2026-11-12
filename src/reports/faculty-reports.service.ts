@@ -60,7 +60,7 @@ import {
   hoursFromAttendanceLog,
   requiredHoursPerStudentFromOpportunity,
   resolveReportFlashEvidence,
-  resolveReportFlashHours,
+  resolveReportDisplayHours,
 } from './community-award.util';
 import {
   isPrivateCandidateOpportunity,
@@ -264,7 +264,7 @@ export function mapFacultyListPackage(
   // blob) — including a genuine live total of 0 (e.g. every session was rejected), which must
   // not fall back to a stale stored value. Only the absence of live data (null) falls back.
   const flashHours =
-    liveHours != null ? liveHours : resolveReportFlashHours(report.section1);
+    liveHours != null ? liveHours : resolveReportDisplayHours(report.section1);
   const memberHours = [
     lead
       ? {
@@ -571,7 +571,7 @@ export class FacultyReportsService {
         project_id: r.opportunityId || r.project_id || null,
         organization_name: trackingOrganizationName(r.opportunity),
         status: r.status,
-        hours: resolveReportFlashHours(r.section1),
+        hours: resolveReportDisplayHours(r.section1),
         updated_at: r.updatedAt,
         draft_locked: true,
         ...computeReportProgress(r),
@@ -793,7 +793,7 @@ export class FacultyReportsService {
       const projectLogs = logsByProject.get(projectId) ?? [];
       const liveHours = projectLogs.length
         ? this.loggedHoursForProject(projectLogs)
-        : resolveReportFlashHours(report.section1);
+        : resolveReportDisplayHours(report.section1);
       const required = requiredHoursPerStudentFromOpportunity(opp);
       const progress = computeReportProgress(report);
       const email = pickListString(report.student?.email);
@@ -910,7 +910,9 @@ export class FacultyReportsService {
           review_route: reviewRouteForOpportunity(r.opportunity),
           project_id: r.opportunityId || r.project_id || null,
           hours:
-            liveHours != null ? liveHours : resolveReportFlashHours(r.section1),
+            liveHours != null
+              ? liveHours
+              : resolveReportDisplayHours(r.section1),
           submission_date: r.submission_date,
           report_submitted_at: r.reportSubmittedAt,
           partner_approved_at: r.partnerApprovedAt,

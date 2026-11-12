@@ -20,6 +20,10 @@ import {
   LINE_STATUS,
 } from '../opportunities/opportunity-workflow.service';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
+import {
+  resolveReportDisplayHours,
+  type ReportFlashSource,
+} from '../reports/community-award.util';
 
 /** Participation statuses treated as “active” for faculty dashboard student counts. */
 const ACTIVE_PARTICIPATION_STATUSES = [
@@ -1365,8 +1369,11 @@ export class FacultyService {
                 | undefined
             )?.metrics
           : undefined;
+        // Same hours the wall, flashcard and certificate show (larger of stored and logged).
         const totalHours = metricsReleased
-          ? Number(metrics?.total_verified_hours ?? 0) || undefined
+          ? resolveReportDisplayHours(
+              latestReport?.section1 as ReportFlashSource['section1'],
+            ) || undefined
           : undefined;
         const eisScore = metricsReleased
           ? Number(metrics?.eis_score ?? 0) || undefined

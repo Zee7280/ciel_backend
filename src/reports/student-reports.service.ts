@@ -92,7 +92,7 @@ import {
   scoreCommunityAward,
   communityAwardInputsFromReport,
   resolveDisplayCii,
-  resolveReportFlashHours,
+  resolveReportDisplayHours,
   isCiiFacultyLocked,
   communityServiceLevel,
   isCommunityAwardLiveReport,
@@ -1009,7 +1009,7 @@ export class StudentReportsService {
       report,
       opportunityByProjectId,
     );
-    const flashHours = resolveReportFlashHours(report.section1);
+    const flashHours = resolveReportDisplayHours(report.section1);
 
     return {
       id: report.id,

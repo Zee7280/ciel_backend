@@ -1767,6 +1767,85 @@ export class MailService {
   }
 
   /** Sent when CIEL admin approves an opportunity. Goes to the creator so they can open their report. */
+  /**
+   * Approval email for a student-created opportunity: the CIEL PK Team Lead brief
+   * (team members, review, resources, partnerships, evidence). Values arrive HTML-escaped.
+   */
+  private studentOpportunityApprovedHtml(v: {
+    titleEsc: string;
+    codeEsc: string;
+    partnerEsc: string;
+    hoursEsc: string;
+    periodEsc: string;
+    startLink: string;
+    hubLink: string;
+    instructionsHtml: string;
+  }): string {
+    const h2 =
+      'margin: 22px 0 8px 0; font-size: 15px; font-weight: 800; color: #0f5f59;';
+    const p = 'margin: 0 0 12px 0; font-size: 14px;';
+    const li = 'margin: 0 0 8px 0; font-size: 14px;';
+    const note =
+      'margin: 0 0 12px 0; font-size: 14px; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 8px; padding: 10px 12px;';
+    return `
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; color: #16313d; line-height: 1.55;">
+        <div style="background: linear-gradient(125deg, #0d3b45 0%, #0f6e68 70%); color: #fff; border-radius: 14px 14px 0 0; padding: 28px 28px 22px;">
+          <p style="margin: 0 0 8px 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #e8d48a; font-weight: 700;">CIEL PK · Community Service</p>
+          <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 800;">Congratulations! Your opportunity is approved 🎉</h1>
+          <p style="margin: 10px 0 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">You are now officially the Team Lead.</p>
+        </div>
+        <div style="border: 1px solid #d7e3e6; border-top: 0; border-radius: 0 0 14px 14px; padding: 26px 28px 28px; background: #ffffff;">
+          <p style="${p}">Dear Student,</p>
+          <p style="${p}">Congratulations! Your community service opportunity <strong>“${v.titleEsc}”</strong>${v.codeEsc ? ` (<strong>${v.codeEsc}</strong>)` : ''} has been approved on CIEL PK, and you are now officially the <strong>Team Lead</strong>.</p>
+          <p style="${p}">Before beginning your activities, please follow these important instructions:</p>
+
+          <h2 style="${h2}">1. Team Members – Section 1</h2>
+          <p style="${p}">Start your report and add your team members. You may add or remove members before final report submission. Once submitted, changes will not be permitted.</p>
+
+          <h2 style="${h2}">2. Review Your Report Before Starting</h2>
+          <p style="${p}">Carefully review all report sections to understand the expected activities, outcomes, attendance, resources, partnerships and supporting evidence.</p>
+
+          <h2 style="${h2}">3. Resources – Section 5</h2>
+          <p style="${p}">Record every resource used, whether self-funded, donated or sponsored, including cash, educational materials, medical supplies, equipment and other contributions.</p>
+          <p style="${p}"><em>Example:</em> 50 notebooks × PKR 100 = PKR 5,000.</p>
+          <p style="${p}">For every contribution, provide the contributor's name, email, mobile number with country code, quantity, unit, PKR value and supporting evidence.</p>
+          <p style="${p}"><strong>Evidence and Accountability:</strong> Every contribution must have a clear, verifiable trail showing where the resource came from, how it was utilized and who ultimately received it.</p>
+          <p style="${p}">For example:</p>
+          <ul style="margin: 0 0 12px 0; padding-left: 20px;">
+            <li style="${li}"><strong>Cash donation:</strong> If a family member contributes PKR 10,000, upload a bank transfer receipt or other payment proof, along with evidence showing how the funds were spent on the community activity.</li>
+            <li style="${li}"><strong>Books or supplies:</strong> If 50 books are donated, provide purchase receipts (where available), photographs of the books and evidence of their delivery to the beneficiaries.</li>
+          </ul>
+          <p style="${note}"><strong>Important:</strong> Simply claiming a donation or contribution without receipts, delivery records or other credible evidence will weaken your claim and may affect report approval.</p>
+          <p style="${p}">External contributors will be linked to your project on CIEL PK. Following report approval, they will receive an appreciation email and contribution certificate, and their contributions will be reflected in their CIEL PK accounts.</p>
+
+          <h2 style="${h2}">4. Partnerships – Section 6</h2>
+          <p style="${p}">Every organization or location hosting or supporting your activity must be registered as a partner.</p>
+          <p style="${p}"><em>Example:</em> If you conduct awareness sessions in 10 schools, all 10 schools must be listed as partners.</p>
+          <p style="${p}">Provide each partner's organization profile, representative's name, email, mobile number with country code and contribution (hosting, facilities, materials, sponsorship, etc.).</p>
+          <p style="${note}"><strong>Important:</strong> Activities claimed without identifiable partners and verifiable supporting evidence may result in report rejection.</p>
+
+          <p style="margin: 20px 0 22px 0; font-size: 14px; color: #0f6e62;"><strong>Remember: Every activity, resource and partnership must be properly documented. Strong evidence creates credible community impact!</strong></p>
+${v.instructionsHtml}
+          <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
+            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #1f7a61;">Opportunity details</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Title:</strong> ${v.titleEsc}</p>
+            ${v.codeEsc ? `<p style="margin: 0 0 4px 0; font-size: 14px;"><strong>ID:</strong> ${v.codeEsc}</p>` : ''}
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Partner:</strong> ${v.partnerEsc}</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Required hours:</strong> ${v.hoursEsc}</p>
+            <p style="margin: 0; font-size: 14px;"><strong>Project period:</strong> ${v.periodEsc}</p>
+          </div>
+
+          <div style="text-align: center; margin: 8px 0 10px;">
+            <a href="${v.startLink}" style="background-color: #174b43; color: #ffffff; padding: 13px 28px; text-decoration: none; border-radius: 8px; font-weight: 800; display: inline-block; font-size: 14px;">Start Report →</a>
+          </div>
+          <p style="text-align: center; margin: 0 0 22px 0; font-size: 12.5px; color: #5d727a;">Or open <a href="${v.hubLink}" style="color: #0e7d74; font-weight: 700;">Approved / Live</a> in Create Opportunity.</p>
+
+          <p style="margin: 0; font-size: 14px; color: #16313d;">Best regards,<br><strong>Team CIEL PK</strong><br>Community Impact Education Lab Pakistan<br><a href="https://www.cielpk.com" style="color: #0e7d74;">www.cielpk.com</a></p>
+        </div>
+      </div>
+    `;
+  }
+
   async sendOpportunityLiveStartReportEmail(input: {
     to: string;
     creatorName: string;
@@ -1813,7 +1892,18 @@ export class MailService {
     );
     const student = input.isStudentCreator !== false;
 
-    const html = `
+    const html = student
+      ? this.studentOpportunityApprovedHtml({
+          titleEsc,
+          codeEsc,
+          partnerEsc,
+          hoursEsc,
+          periodEsc,
+          startLink,
+          hubLink,
+          instructionsHtml,
+        })
+      : `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; color: #16313d; line-height: 1.55;">
         <div style="background: linear-gradient(125deg, #0d3b45 0%, #0f6e68 70%); color: #fff; border-radius: 14px 14px 0 0; padding: 28px 28px 22px;">
           <p style="margin: 0 0 8px 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #e8d48a; font-weight: 700;">CIEL PK · Community Service</p>

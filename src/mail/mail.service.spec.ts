@@ -107,7 +107,7 @@ describe('MailService — SMTP reliability', () => {
     expect(sendMailReliable.mock.calls[0][0].to).toBe('partner@ngo.org');
     expect(sendMailReliable.mock.calls[1][0].to).toBe('faculty@uni.edu');
   });
-  it('live start-report email tells a private-team creator to add members, and nobody else', async () => {
+  it('student approval email is the CIEL PK Team Lead brief, for open and private teams alike', async () => {
     const { service, internals } = makeService();
     const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
       Promise.resolve({ messageId: 'x' }),
@@ -133,17 +133,26 @@ describe('MailService — SMTP reliability', () => {
     const [privateHtml, openHtml] = sendMailReliable.mock.calls.map((c) =>
       typeof c[0].html === 'string' ? c[0].html : '',
     );
-    expect(privateHtml).toContain('This is a private team');
-    expect(privateHtml).toContain('add your members in Section 1');
-    expect(openHtml).not.toContain('private team');
-    expect(openHtml).toContain(
-      'add your team members in <strong>Section 1</strong>, if any',
-    );
-    expect(openHtml).toContain('You can add or remove team members later.');
-    expect(openHtml).toContain('Good luck with your community impact journey!');
-    expect(privateHtml).not.toContain(
-      'add your team members in <strong>Section 1</strong>',
-    );
+    for (const html of [privateHtml, openHtml]) {
+      expect(html).toContain('Dear Student,');
+      expect(html).toContain(
+        'you are now officially the <strong>Team Lead</strong>',
+      );
+      expect(html).toContain('1. Team Members – Section 1');
+      expect(html).toContain('2. Review Your Report Before Starting');
+      expect(html).toContain('3. Resources – Section 5');
+      expect(html).toContain('50 notebooks × PKR 100 = PKR 5,000.');
+      expect(html).toContain('4. Partnerships – Section 6');
+      expect(html).toContain('all 10 schools must be listed as partners');
+      expect(html).toContain(
+        'Strong evidence creates credible community impact!',
+      );
+      expect(html).toContain('Start Report →');
+      expect(html).toContain('www.cielpk.com');
+      expect(html).not.toContain(
+        'Good luck with your community impact journey!',
+      );
+    }
   });
 
   it('live start-report email to a non-student creator has no team-member or good-luck lines', async () => {

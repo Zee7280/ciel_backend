@@ -53,6 +53,7 @@ import { FacultyUniversityScopeService } from '../faculty-university-scope/facul
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -643,10 +644,29 @@ export class FacultyReportsService {
         )
       : participantsAll;
 
+    // Private / Independent Candidate listings stay off this list unless CIEL PK or the student
+    // named this faculty on the listing itself (then they supervise it like any other project).
+    const facultyEmailKey = String(facultyEmail || '')
+      .trim()
+      .toLowerCase();
+    const namesThisFaculty = (opp: Opportunity): boolean => {
+      if (opp.facultyId && String(opp.facultyId) === String(facultyId)) {
+        return true;
+      }
+      const contact = (opp.supervision as { contact?: unknown } | null)
+        ?.contact;
+      return (
+        !!facultyEmailKey &&
+        typeof contact === 'string' &&
+        contact.trim().toLowerCase() === facultyEmailKey
+      );
+    };
     const oppById = new Map(
       opportunities
         .filter(
-          (opp) => !isRejectedOpportunity(opp) && !isPrivateStudentPathway(opp),
+          (opp) =>
+            !isRejectedOpportunity(opp) &&
+            (!isPrivateStudentPathway(opp) || namesThisFaculty(opp)),
         )
         .map((opp) => [opp.id, opp]),
     );
@@ -832,6 +852,69 @@ export class FacultyReportsService {
       });
     }
 
+    // A live student-created listing shows up as soon as CIEL PK approves it, before the student
+    // has a seat or has started the report (0% progress until they do).
+    const coveredProjects = new Set(
+      data.map((row) =>
+        typeof row.project_id === 'string' ? row.project_id : '',
+      ),
+    );
+    const awaitingStart = [...oppById.values()].filter(
+      (opp) =>
+        opp.isStudentCreated === true &&
+        opp.admin_approved === true &&
+        !coveredProjects.has(opp.id),
+    );
+    if (awaitingStart.length) {
+      const creators = await this.loadTrackingCreators(awaitingStart);
+      for (const opp of awaitingStart) {
+        const creator = opp.creatorId ? creators.get(opp.creatorId) : undefined;
+        const projectLogs = logsByProject.get(opp.id) ?? [];
+        const liveHours = this.loggedHoursForProject(projectLogs);
+        const required = requiredHoursPerStudentFromOpportunity(opp);
+        const hoursPct =
+          required > 0
+            ? Math.min(100, Math.round((liveHours / required) * 100))
+            : 0;
+        const lastActivity = latestActivityIso([
+          ...projectLogs.map((l) => l.updatedAt),
+          opp.updatedAt,
+          opp.createdAt,
+        ]);
+        const name = creator?.name || 'Student';
+        const email = creator?.email || '';
+        data.push({
+          id: `live:${opp.id}`,
+          participation_id: null,
+          report_id: null,
+          student_name: name,
+          student_email: email.includes('@') ? email : null,
+          project_title: opp.title || 'Project',
+          project_id: opp.id,
+          organization_name: trackingOrganizationName(opp),
+          hours: Math.round(liveHours * 10) / 10,
+          required_hours: required,
+          hours_progress_pct: hoursPct,
+          progress_pct: hoursPct,
+          sections_complete: 0,
+          sections_total: 10,
+          status: 'assigned',
+          faculty_status: null,
+          submission_date: null,
+          report_submitted_at: null,
+          updated_at: lastActivity || null,
+          last_activity_at: lastActivity || null,
+          draft_locked: true,
+          team_id: null,
+          is_team_lead: true,
+          participation_type: 'individual',
+          member_hours: [
+            { name, hours: Math.round(liveHours * 10) / 10, required },
+          ],
+        });
+      }
+    }
+
     data.sort((a, b) => {
       const ta =
         Date.parse(
@@ -853,6 +936,31 @@ export class FacultyReportsService {
     });
 
     return { success: true, data };
+  }
+
+  /** Creator name / email for tracking rows of listings nobody has started yet. Best-effort. */
+  private async loadTrackingCreators(
+    opportunities: Opportunity[],
+  ): Promise<Map<string, { name?: string | null; email?: string | null }>> {
+    const ids = [
+      ...new Set(opportunities.map((o) => o.creatorId).filter(Boolean)),
+    ];
+    const byId = new Map<
+      string,
+      { name?: string | null; email?: string | null }
+    >();
+    if (!ids.length) return byId;
+    try {
+      const users = await this.opportunitiesRepository.manager
+        .getRepository(User)
+        .find({ where: { id: In(ids) }, select: ['id', 'name', 'email'] });
+      for (const u of users) byId.set(u.id, { name: u.name, email: u.email });
+    } catch (error) {
+      this.logger.warn(
+        `Tracking creators lookup failed: ${(error as Error).message}`,
+      );
+    }
+    return byId;
   }
 
   /** Same submit bar: rejected sessions do not count; pending sessions do. Clock fallback matches student wizard. */

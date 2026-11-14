@@ -1523,6 +1523,129 @@ describe('FacultyReportsService — project tracking (assigned students + live h
     });
   });
 
+  it('shows a live student-created listing before anyone has a seat or a report', async () => {
+    const {
+      service,
+      facultyService,
+      participationRepository,
+      opportunitiesRepository,
+      attendanceLogsRepository,
+      qb,
+    } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue([
+      'opp-live',
+      'opp-pending',
+      'opp-faculty',
+    ]);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-live',
+        title: 'Campus Clean-Up',
+        status: 'active',
+        workflowStage: 'live',
+        admin_approved: true,
+        isStudentCreated: true,
+        creatorId: 'stu-9',
+        timeline: { expected_hours: 16 },
+        executing_context: {},
+        updatedAt: new Date('2026-11-01'),
+      },
+      {
+        id: 'opp-pending',
+        title: 'Not approved yet',
+        status: 'pending_partner',
+        workflowStage: 'pending_partner',
+        admin_approved: false,
+        isStudentCreated: true,
+        creatorId: 'stu-9',
+        executing_context: {},
+      },
+      {
+        id: 'opp-faculty',
+        title: 'Faculty listing',
+        status: 'active',
+        workflowStage: 'live',
+        admin_approved: true,
+        isStudentCreated: false,
+        creatorId: 'f-1',
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
+    const userFind = jest
+      .fn()
+      .mockResolvedValue([
+        { id: 'stu-9', name: 'Zara Student', email: 'zara@uni.edu' },
+      ]);
+    (opportunitiesRepository as unknown as { manager: unknown }).manager = {
+      getRepository: () => ({ find: userFind }),
+    };
+
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]).toMatchObject({
+      id: 'live:opp-live',
+      report_id: null,
+      student_name: 'Zara Student',
+      student_email: 'zara@uni.edu',
+      project_id: 'opp-live',
+      status: 'assigned',
+      progress_pct: 0,
+      required_hours: 16,
+      draft_locked: true,
+    });
+  });
+
+  it('keeps a Private Candidate listing only for the faculty named on it', async () => {
+    const {
+      service,
+      facultyService,
+      participationRepository,
+      opportunitiesRepository,
+      attendanceLogsRepository,
+      qb,
+    } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue([
+      'opp-named',
+      'opp-other',
+    ]);
+    const privateOpp = (id: string, over: object) => ({
+      id,
+      title: id,
+      status: 'active',
+      workflowStage: 'live',
+      timeline: { expected_hours: 16 },
+      executing_context: { student_pathway: 'private' },
+      ...over,
+    });
+    opportunitiesRepository.find.mockResolvedValue([
+      privateOpp('opp-named', { supervision: { contact: 'F@X.com ' } }),
+      privateOpp('opp-other', { supervision: { contact: 'other@x.com' } }),
+    ]);
+    const seat = (projectId: string) => ({
+      id: `seat-${projectId}`,
+      projectId,
+      studentId: `stu-${projectId}`,
+      fullName: 'Student',
+      student: { id: `stu-${projectId}`, name: 'Student' },
+      updatedAt: new Date('2026-10-01'),
+      createdAt: new Date('2026-09-01'),
+    });
+    participationRepository.find.mockResolvedValue([
+      seat('opp-named'),
+      seat('opp-other'),
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
+
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+
+    expect(res.data.map((r) => r.project_id)).toEqual(['opp-named']);
+  });
+
   it('returns an empty list when the faculty has no scoped opportunities', async () => {
     const { service, facultyService } = makeService(null);
     facultyService.getScopedOpportunityIds.mockResolvedValue([]);

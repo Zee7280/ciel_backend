@@ -2637,15 +2637,21 @@ export class OpportunitiesService {
     });
   }
 
-  private async handleAdminApprovedSideEffects(opportunity: Opportunity) {
+  private async handleAdminApprovedSideEffects(
+    opportunity: Opportunity,
+    instructions?: string,
+  ) {
+    const liveMessage = opportunity.isStudentCreated
+      ? opportunity.team_mode === 'private_team'
+        ? 'Your private team is live on CIEL. Start your report and add your members in Section 1 — nobody applies to a private team.'
+        : 'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.'
+      : 'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.';
     // In-app notice only. The creator email below is the one live message.
     await this.notifyStudentOpportunityUpdate(opportunity, {
       title: 'Opportunity live',
-      message: opportunity.isStudentCreated
-        ? opportunity.team_mode === 'private_team'
-          ? 'Your private team is live on CIEL. Start your report and add your members in Section 1 — nobody applies to a private team.'
-          : 'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.'
-        : 'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.',
+      message: instructions
+        ? `${liveMessage}\n\nInstructions from CIEL PK:\n${instructions}`
+        : liveMessage,
       emailSubject: 'Your opportunity is now live',
       skipStatusEmail: true,
     });
@@ -2667,6 +2673,7 @@ export class OpportunitiesService {
           ),
           isStudentCreator: opportunity.isStudentCreated === true,
           isPrivateTeam: opportunity.team_mode === 'private_team',
+          adminInstructions: instructions,
         });
       } catch (error) {
         console.warn('Failed to send opportunity live start-report email', {
@@ -5722,7 +5729,9 @@ export class OpportunitiesService {
     return this.opportunitiesRepository.save(opp);
   }
 
-  async approve(id: string, actor?: ApprovalActor) {
+  async approve(id: string, actor?: ApprovalActor, rawInstructions?: unknown) {
+    // Optional note for the creator ("basic instructions"); same trim + 2000-char cap as a reason.
+    const instructions = this.normalizeDecisionReason(rawInstructions);
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
     // Idempotent: repeated approve (double-click, retried request) must not re-run side effects / emails.
@@ -5742,9 +5751,9 @@ export class OpportunitiesService {
         'CIEL final approval is only available after faculty and partner steps (when applicable) are completed.',
       );
     }
-    this.opportunityWorkflow.afterAdminApproved(opp, actor);
+    this.opportunityWorkflow.afterAdminApproved(opp, actor, instructions);
     const saved = await this.opportunitiesRepository.save(opp);
-    await this.handleAdminApprovedSideEffects(saved);
+    await this.handleAdminApprovedSideEffects(saved, instructions);
     return saved;
   }
 

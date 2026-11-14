@@ -33,6 +33,7 @@ import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
 import { AdminUpdateOpportunityDetailsDto } from './dto/admin-update-opportunity-details.dto';
+import { AdminApproveOpportunityDto } from './dto/admin-approve-opportunity.dto';
 
 type AuthedRequest = { user: { id: string; name?: string; email?: string } };
 
@@ -115,11 +116,13 @@ export class AdminOpportunitiesController {
   async approve(
     @Request() req: AuthedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body?: AdminApproveOpportunityDto,
   ) {
-    await this.opportunitiesService.approve(id, {
-      id: req.user.id,
-      name: req.user.name,
-    });
+    await this.opportunitiesService.approve(
+      id,
+      { id: req.user.id, name: req.user.name },
+      body?.instructions,
+    );
     return { success: true, data: {} };
   }
 
@@ -129,11 +132,13 @@ export class AdminOpportunitiesController {
   async approvePatch(
     @Request() req: AuthedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body?: AdminApproveOpportunityDto,
   ) {
-    await this.opportunitiesService.approve(id, {
-      id: req.user.id,
-      name: req.user.name,
-    });
+    await this.opportunitiesService.approve(
+      id,
+      { id: req.user.id, name: req.user.name },
+      body?.instructions,
+    );
     return { success: true, data: {} };
   }
 

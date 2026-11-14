@@ -2650,6 +2650,77 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     ).toHaveBeenCalledWith(expect.objectContaining({ isPrivateTeam: false }));
   });
 
+  it('CIEL approve with instructions sends them to the creator and keeps them in history', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      requiresPartnerApproval: false,
+      partnerVerified: true,
+      partnerApprovalStatus: 'not_applicable',
+      timeline: { expected_hours: 16 },
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+
+    const saved = await service.approve(
+      'opp-1',
+      { id: 'admin-1', name: 'CIEL PK' },
+      '  Log hours after every session.  ',
+    );
+
+    expect(saved.workflowStage).toBe('live');
+    expect(saved.approvalHistory.at(-1)).toEqual(
+      expect.objectContaining({
+        line: 'admin',
+        action: 'approved',
+        reason: 'Log hours after every session.',
+      }),
+    );
+    expect(
+      privates(service).mailService.sendOpportunityLiveStartReportEmail,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adminInstructions: 'Log hours after every session.',
+      }),
+    );
+  });
+
+  it('CIEL approve without instructions keeps the plain live email', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      requiresPartnerApproval: false,
+      partnerVerified: true,
+      partnerApprovalStatus: 'not_applicable',
+      timeline: { expected_hours: 16 },
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+
+    const saved = await service.approve('opp-1', { id: 'admin-1' }, '   ');
+
+    expect(saved.approvalHistory.at(-1)?.reason).toBeNull();
+    expect(
+      privates(service).mailService.sendOpportunityLiveStartReportEmail,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ adminInstructions: undefined }),
+    );
+  });
+
   it('CIEL approve of a private team tells the creator to add members in the report', async () => {
     const opp = {
       id: 'opp-1',

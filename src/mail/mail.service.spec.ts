@@ -168,6 +168,40 @@ describe('MailService — SMTP reliability', () => {
     expect(html).not.toContain('Good luck with your community impact journey!');
   });
 
+  it('live start-report email shows escaped CIEL PK instructions only when given', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    const base = {
+      to: 'ali@uni.edu',
+      creatorName: 'Ali Khan',
+      projectTitle: 'Campus garden',
+      partnerName: '—',
+      requiredHours: '16',
+      projectPeriod: 'Oct – Dec 2026',
+      reportPath: '/dashboard/student/report?projectId=opp-1',
+      isStudentCreator: true,
+    };
+
+    await service.sendOpportunityLiveStartReportEmail({
+      ...base,
+      adminInstructions: 'Log hours weekly.\nNo <script> photos of minors',
+    });
+    await service.sendOpportunityLiveStartReportEmail(base);
+
+    const [withNote, plain] = sendMailReliable.mock.calls.map((c) =>
+      typeof c[0].html === 'string' ? c[0].html : '',
+    );
+    expect(withNote).toContain('Instructions from CIEL PK');
+    expect(withNote).toContain(
+      'Log hours weekly.<br>No &lt;script&gt; photos of minors',
+    );
+    expect(withNote).not.toContain('<script>');
+    expect(plain).not.toContain('Instructions from CIEL PK');
+  });
+
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
     const { service, internals } = makeService();
     const send = jest

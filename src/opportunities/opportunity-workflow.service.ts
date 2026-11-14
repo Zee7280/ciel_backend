@@ -389,8 +389,12 @@ export class OpportunityWorkflowService {
     }
   }
 
-  afterAdminApproved(opp: Opportunity, actor?: ApprovalActor): void {
-    this.stamp(opp, 'admin', 'approved', actor);
+  afterAdminApproved(
+    opp: Opportunity,
+    actor?: ApprovalActor,
+    instructions?: string | null,
+  ): void {
+    this.stamp(opp, 'admin', 'approved', actor, instructions);
     opp.admin_approved = true;
     opp.adminApprovalStatus = LINE_STATUS.APPROVED;
     opp.workflowStage = WORKFLOW_STAGE.LIVE;

@@ -1779,6 +1779,8 @@ export class MailService {
     isStudentCreator?: boolean;
     /** Private team (opportunities.team_mode): nobody applies, the creator adds members in the report. */
     isPrivateTeam?: boolean;
+    /** Optional note the CIEL PK admin wrote when approving (plain text). */
+    adminInstructions?: string | null;
   }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -1786,6 +1788,14 @@ export class MailService {
     const first =
       (input.creatorName || '').trim().split(/\s+/).filter(Boolean)[0] ||
       'there';
+    const instructionsText = (input.adminInstructions || '').trim();
+    const instructionsHtml = instructionsText
+      ? `
+          <div style="background: #fffaf0; border: 1px solid #f0dfae; border-left: 4px solid #c9a227; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
+            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #8a6d12;">Instructions from CIEL PK</p>
+            <p style="margin: 0; font-size: 14px; color: #16313d;">${this.escHtmlPlain(instructionsText).replace(/\r?\n/g, '<br>')}</p>
+          </div>`
+      : '';
     const nameEsc = this.escHtmlPlain(first);
     const titleEsc = this.escHtmlPlain(
       input.projectTitle || 'your opportunity',
@@ -1824,7 +1834,7 @@ export class MailService {
                 ? '<p style="margin: 0 0 18px 0;">Click <strong>Start Report</strong> and add your team members in <strong>Section 1</strong>, if any. You can add or remove team members later.</p>'
                 : ''
           }
-
+${instructionsHtml}
           <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
             <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #1f7a61;">Opportunity details</p>
             <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Title:</strong> ${titleEsc}</p>

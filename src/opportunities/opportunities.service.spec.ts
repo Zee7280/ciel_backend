@@ -437,6 +437,47 @@ describe('OpportunitiesService — public faculty verification', () => {
     expect(JSON.stringify(preview)).not.toContain('faculty-secret');
   });
 
+  it('faculty and partner review cards carry the creator contact for the named reviewer', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Food rescue',
+      faculty_verification_token: 'faculty-secret',
+      partnerToken: 'partner-secret',
+      isStudentCreated: true,
+      faculty_verified: false,
+      admin_approved: false,
+      creatorId: 'student-1',
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+    } as unknown as Opportunity;
+    const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+    const userFind = jest.fn().mockResolvedValue({
+      id: 'student-1',
+      name: 'Ali Khan',
+      email: 'ali@uni.edu',
+      phone: '+92 300 1234567',
+      university: 'BNU',
+    });
+    privates(service).usersRepository.findOne = userFind;
+
+    const faculty =
+      await service.getPublicFacultyVerificationPreview('faculty-secret');
+    const partner =
+      await service.getPublicPartnerVerificationPreview('partner-secret');
+
+    const expected = {
+      name: 'Ali Khan',
+      email: 'ali@uni.edu',
+      phone: '+92 300 1234567',
+      university: 'BNU',
+    };
+    expect(faculty.record.creator).toEqual(expected);
+    expect(partner.record.creator).toEqual(expected);
+    expect(userFind).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'student-1' } }),
+    );
+  });
+
   it('rejects via the faculty token without a login', async () => {
     const opp = {
       id: 'opp-f',

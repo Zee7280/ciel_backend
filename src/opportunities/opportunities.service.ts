@@ -6113,6 +6113,33 @@ export class OpportunitiesService {
    * the faculty/liaison tokens) and return only opportunity-summary data, never participant lists
    * or other students' information.
    */
+  /**
+   * Creator contact for the emailed faculty / partner review card, so the named reviewer can
+   * email or WhatsApp the person who created the opportunity. Token holders only.
+   */
+  private async publicPreviewCreator(opportunity: Opportunity) {
+    if (!opportunity.creatorId) return null;
+    try {
+      const creator = await this.usersRepository.findOne({
+        where: { id: opportunity.creatorId },
+        select: ['id', 'name', 'email', 'phone', 'university', 'institution'],
+      });
+      if (!creator) return null;
+      return {
+        name: creator.name || null,
+        email: creator.email || null,
+        phone: creator.phone || null,
+        university: creator.university || creator.institution || null,
+      };
+    } catch (error) {
+      console.warn('Failed to load creator for review preview', {
+        opportunityId: opportunity.id,
+        error: (error as Error).message,
+      });
+      return null;
+    }
+  }
+
   async getPublicPartnerVerificationPreview(rawToken: string) {
     const token = this.normalizeVerificationToken(rawToken);
     const opportunity = await this.opportunitiesRepository.findOne({
@@ -6123,6 +6150,7 @@ export class OpportunitiesService {
     }
     this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
     const json = jsonColumnsOf(opportunity);
+    const creator = await this.publicPreviewCreator(opportunity);
     return {
       title: opportunity.title,
       alreadyVerified: !!opportunity.partnerVerified,
@@ -6144,6 +6172,7 @@ export class OpportunitiesService {
         secondary_sdgs: opportunity.secondary_sdgs,
         verification_method: opportunity.verification_method,
         visibility: opportunity.visibility,
+        creator,
       },
     };
   }
@@ -6273,6 +6302,7 @@ export class OpportunitiesService {
       : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
     const closed = this.isClosedForTokenAction(opportunity);
     const json = jsonColumnsOf(opportunity);
+    const creator = await this.publicPreviewCreator(opportunity);
     return {
       title: opportunity.title,
       alreadyVerified,
@@ -6295,6 +6325,7 @@ export class OpportunitiesService {
         secondary_sdgs: opportunity.secondary_sdgs,
         verification_method: opportunity.verification_method,
         visibility: opportunity.visibility,
+        creator,
       },
     };
   }

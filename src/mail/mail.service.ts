@@ -1705,6 +1705,100 @@ export class MailService {
     }
   }
 
+  /**
+   * Communication loop: tells one stakeholder (creator, faculty, partner or CIEL PK) that another
+   * reviewer rejected the opportunity or sent it back for revision. FYI only — no action link.
+   */
+  async sendOpportunityStakeholderDecisionNotice(input: {
+    to: string;
+    recipientRole: 'creator' | 'faculty' | 'partner' | 'admin';
+    projectTitle: string;
+    publicCode?: string | null;
+    decidedBy: 'faculty' | 'partner' | 'admin';
+    action: 'rejected' | 'revision_requested';
+    reason?: string | null;
+  }) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const rejected = input.action === 'rejected';
+    const who =
+      input.decidedBy === 'faculty'
+        ? 'The faculty supervisor'
+        : input.decidedBy === 'partner'
+          ? 'The partner organization'
+          : 'CIEL PK';
+    const title = (input.projectTitle || 'Opportunity').trim();
+    const titleEsc = this.escHtmlPlain(title);
+    const code = (input.publicCode || '').trim();
+    const codeEsc = code ? ` (${this.escHtmlPlain(code)})` : '';
+    const heading = rejected
+      ? 'Opportunity rejected'
+      : 'Status updated: revision requested';
+    const what = rejected
+      ? `${who} has <strong>permanently rejected</strong> the opportunity <strong>“${titleEsc}”</strong>${codeEsc}.`
+      : `${who} has sent the opportunity <strong>“${titleEsc}”</strong>${codeEsc} <strong>back to the creator for revision</strong>.`;
+    const status = rejected
+      ? 'Status: <strong>Rejected</strong>. The opportunity is closed and can no longer be edited or approved.'
+      : 'Status: <strong>Revision requested</strong>. The review continues after the creator updates and resubmits it.';
+    const next =
+      input.recipientRole === 'creator'
+        ? rejected
+          ? 'You can create a new opportunity from your dashboard if you wish to try again.'
+          : 'Please open your dashboard, make the requested changes and save to resubmit.'
+        : rejected
+          ? 'This is for your information. No action is needed from you.'
+          : 'This is for your information. You will be notified if your review is needed again.';
+    const reasonText = (input.reason || '').trim();
+    const reasonBlock = reasonText
+      ? `<p style="margin:20px 0 0 0;font-size:14px;"><strong>Reason / feedback:</strong></p><p style="background:#f8fafc;border-left:4px solid #94a3b8;padding:12px 14px;margin:8px 0 0 0;color:#334155;font-size:14px;line-height:1.5;">${this.escHtmlPlain(reasonText).replace(/\r?\n/g, '<br>')}</p>`
+      : '';
+    const accent = rejected ? '#b42318' : '#b45309';
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:#f3f4f6;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;background-color:#ffffff;border:1px solid #e0e0e0;border-top:4px solid ${accent};border-radius:10px;">
+          <tr>
+            <td style="padding:36px;color:#111827;">
+              <p style="margin:0 0 8px 0;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#6b7280;font-weight:700;">CIEL PK · Opportunity update</p>
+              <h1 style="margin:0 0 18px 0;font-size:22px;font-weight:700;line-height:1.3;color:${accent};">${heading}</h1>
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">${what}</p>
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">${status}</p>
+              ${reasonBlock}
+              <p style="margin:20px 0 0 0;font-size:14px;line-height:1.6;color:#374151;">${next}</p>
+              <p style="margin:24px 0 0 0;font-size:13px;color:#6b7280;">— <strong style="color:#111827;">CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `${rejected ? 'Opportunity rejected' : 'Status update: revision requested'} — ${title}`,
+        html,
+      });
+      this.logger.log(
+        `Opportunity ${input.action} stakeholder notice sent to ${input.recipientRole} ${input.to}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed opportunity ${input.action} stakeholder notice to ${input.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
   async sendStudentOpportunityStatusUpdate(
     to: string,
     projectTitle: string,

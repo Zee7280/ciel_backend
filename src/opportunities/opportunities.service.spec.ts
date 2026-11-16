@@ -2584,6 +2584,145 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     return { service, save };
   }
 
+  describe('communication loop: reject / revision reaches every stakeholder', () => {
+    const baseOpp = () =>
+      ({
+        id: 'opp-loop',
+        title: 'Campus Clean-Up',
+        isStudentCreated: true,
+        creatorId: 'student-1',
+        workflowStage: 'pending_admin',
+        status: 'pending_approval',
+        admin_approved: false,
+        adminApprovalStatus: 'pending',
+        faculty_verified: true,
+        facultyApprovalStatus: 'approved',
+        requiresPartnerApproval: true,
+        partnerVerified: true,
+        partnerApprovalStatus: 'approved',
+        supervision: {
+          supervisor_name: 'Dr Zubair',
+          contact: 'zubair@uni.edu',
+          partner_email: 'ngo@org.pk',
+        },
+        createdAt: new Date('2026-10-01'),
+      }) as unknown as Opportunity;
+
+    function loopService(opp: Opportunity) {
+      const { service } = mailReadyService(opp);
+      const notice = jest.fn().mockResolvedValue(undefined);
+      Object.assign(privates(service).mailService, {
+        sendOpportunityStakeholderDecisionNotice: notice,
+        getAdminReviewEmails: () => ['admin@cielpk.com'],
+      });
+      const getMany = jest
+        .fn()
+        .mockResolvedValue([{ id: 'faculty-user', email: 'zubair@uni.edu' }]);
+      const qb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+        getMany,
+      };
+      (
+        privates(service).usersRepository as Record<string, unknown>
+      ).createQueryBuilder = jest.fn(() => qb);
+      return { service, notice };
+    }
+    const sentTo = (notice: jest.Mock) =>
+      notice.mock.calls
+        .map(
+          (c: [{ to: string; recipientRole: string }]) =>
+            `${c[0].recipientRole}:${c[0].to}`,
+        )
+        .sort();
+
+    it('CIEL PK reject tells faculty and partner (creator already gets its own email)', async () => {
+      const { service, notice } = loopService(baseOpp());
+      await service.reject('opp-loop', 'Unsafe venue', {
+        id: 'admin-1',
+        name: 'CIEL PK',
+      });
+      expect(sentTo(notice)).toEqual([
+        'faculty:zubair@uni.edu',
+        'partner:ngo@org.pk',
+      ]);
+      expect(notice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          decidedBy: 'admin',
+          action: 'rejected',
+          reason: 'Unsafe venue',
+          projectTitle: 'Campus Clean-Up',
+        }),
+      );
+      expect(
+        privates(service).notificationsService.createApprovalNotification,
+      ).toHaveBeenCalledWith(
+        'faculty-user',
+        'Opportunity rejected',
+        expect.stringContaining('permanently rejected by CIEL PK'),
+      );
+    });
+
+    it('CIEL PK revision updates the status for faculty and partner', async () => {
+      const { service, notice } = loopService(baseOpp());
+      await service.revise('opp-loop', 'Add the school list', {
+        id: 'admin-1',
+      });
+      expect(sentTo(notice)).toEqual([
+        'faculty:zubair@uni.edu',
+        'partner:ngo@org.pk',
+      ]);
+      expect(notice).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'revision_requested' }),
+      );
+    });
+
+    it('partner reject via link tells faculty and CIEL PK, never the partner itself', async () => {
+      const opp = Object.assign(baseOpp(), {
+        workflowStage: 'pending_partner',
+        status: 'pending_partner',
+        partnerVerified: false,
+        partnerApprovalStatus: 'pending',
+        partnerToken: 'ptok',
+        adminApprovalStatus: 'pending',
+      });
+      const { service, notice } = loopService(opp);
+      privates(service).mailService.sendPartnerJoinInvite = jest
+        .fn()
+        .mockResolvedValue(undefined);
+      await service.decideOpportunityViaPartnerToken(
+        'ptok',
+        'reject',
+        'Not our area',
+      );
+      expect(sentTo(notice)).toEqual([
+        'admin:admin@cielpk.com',
+        'faculty:zubair@uni.edu',
+      ]);
+    });
+
+    it('faculty revision at the faculty step does not reach a partner who has not seen it yet', async () => {
+      const opp = Object.assign(baseOpp(), {
+        workflowStage: 'pending_faculty',
+        status: 'pending_faculty',
+        faculty_verified: false,
+        facultyApprovalStatus: 'pending',
+        partnerVerified: false,
+        partnerApprovalStatus: 'pending',
+        faculty_verification_token: 'ftok',
+      });
+      const { service, notice } = loopService(opp);
+      await service.decideOpportunityViaFacultyToken(
+        'ftok',
+        'revision',
+        'Fix dates',
+      );
+      expect(sentTo(notice)).toEqual(['admin:admin@cielpk.com']);
+    });
+  });
+
   it('faculty approve with no partner emails CIEL PK next', async () => {
     const opp = {
       id: 'opp-1',

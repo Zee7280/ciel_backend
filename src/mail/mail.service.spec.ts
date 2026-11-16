@@ -211,6 +211,47 @@ describe('MailService — SMTP reliability', () => {
     expect(plain).not.toContain('Instructions from CIEL PK');
   });
 
+  it('stakeholder decision notice: rejection vs revision wording, escaped reason', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    await service.sendOpportunityStakeholderDecisionNotice({
+      to: 'zubair@uni.edu',
+      recipientRole: 'faculty',
+      projectTitle: 'Campus Clean-Up',
+      publicCode: 'CS-399970',
+      decidedBy: 'partner',
+      action: 'rejected',
+      reason: 'Not <b>our</b> area',
+    });
+    await service.sendOpportunityStakeholderDecisionNotice({
+      to: 'ngo@org.pk',
+      recipientRole: 'partner',
+      projectTitle: 'Campus Clean-Up',
+      decidedBy: 'admin',
+      action: 'revision_requested',
+    });
+    const [rejected, revision] = sendMailReliable.mock.calls.map((c) => c[0]);
+    const htmlOf = (m: SendMailOptions) =>
+      typeof m.html === 'string' ? m.html : '';
+    expect(rejected.subject).toBe('Opportunity rejected — Campus Clean-Up');
+    expect(htmlOf(rejected)).toContain(
+      'The partner organization has <strong>permanently rejected</strong>',
+    );
+    expect(htmlOf(rejected)).toContain('(CS-399970)');
+    expect(htmlOf(rejected)).toContain('Not &lt;b&gt;our&lt;/b&gt; area');
+    expect(htmlOf(rejected)).toContain('No action is needed from you.');
+    expect(revision.subject).toBe(
+      'Status update: revision requested — Campus Clean-Up',
+    );
+    expect(htmlOf(revision)).toContain(
+      'Status: <strong>Revision requested</strong>',
+    );
+    expect(htmlOf(revision)).toContain('CIEL PK has sent the opportunity');
+  });
+
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
     const { service, internals } = makeService();
     const send = jest

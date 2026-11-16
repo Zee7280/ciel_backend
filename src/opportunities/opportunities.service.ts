@@ -5729,6 +5729,151 @@ export class OpportunitiesService {
     return this.opportunitiesRepository.save(opp);
   }
 
+  /**
+   * Communication loop: when any reviewer (faculty, partner or CIEL PK) rejects an opportunity or
+   * sends it back for revision, every OTHER stakeholder hears about it by email and, when they have
+   * a CIEL PK account, an in-app notice. The reviewer who decided is skipped. The creator is
+   * skipped when the caller already sent them its own message (`creatorNotified`). A partner is
+   * only told once the opportunity has actually reached them. Best-effort: never blocks the
+   * decision that was just saved.
+   */
+  private async notifyStakeholdersOfDecision(
+    opportunity: Opportunity,
+    input: {
+      decidedBy: 'faculty' | 'partner' | 'admin';
+      action: 'rejected' | 'revision_requested';
+      reason?: string | null;
+      actorEmail?: string | null;
+      creatorNotified: boolean;
+    },
+  ): Promise<void> {
+    try {
+      const norm = (v: unknown) =>
+        typeof v === 'string' ? v.trim().toLowerCase() : '';
+      const skip = new Set<string>();
+      const actor = norm(input.actorEmail);
+      if (actor) skip.add(actor);
+      const recipients: {
+        email: string;
+        role: 'creator' | 'faculty' | 'partner' | 'admin';
+      }[] = [];
+      const add = (
+        email: unknown,
+        role: 'creator' | 'faculty' | 'partner' | 'admin',
+      ) => {
+        const e = norm(email);
+        if (!e || !e.includes('@') || skip.has(e)) return;
+        skip.add(e);
+        recipients.push({ email: e, role });
+      };
+
+      const creator = await this.getOpportunityCreatorContact(opportunity);
+      if (input.creatorNotified) {
+        const ce = norm(creator?.email);
+        if (ce) skip.add(ce);
+      } else {
+        add(creator?.email, 'creator');
+      }
+      if (input.decidedBy !== 'faculty') {
+        add(this.getFacultyEmailFromOpportunity(opportunity), 'faculty');
+      }
+      if (
+        input.decidedBy !== 'partner' &&
+        this.partnerHasBeenEngaged(opportunity)
+      ) {
+        add(this.resolvePartnerEmailFromOpportunity(opportunity), 'partner');
+      }
+      if (input.decidedBy !== 'admin') {
+        for (const e of this.mailService.getAdminReviewEmails()) {
+          add(e, 'admin');
+        }
+      }
+      if (!recipients.length) return;
+
+      const publicCode = communityServicePublicCode(
+        opportunity.id,
+        opportunity.createdAt,
+      );
+      // Sent side by side so a reviewer's click is not held up by one mail per stakeholder.
+      await Promise.all(
+        recipients.map((r) =>
+          this.mailService.sendOpportunityStakeholderDecisionNotice({
+            to: r.email,
+            recipientRole: r.role,
+            projectTitle: opportunity.title,
+            publicCode,
+            decidedBy: input.decidedBy,
+            action: input.action,
+            reason: input.reason,
+          }),
+        ),
+      );
+
+      // In-app notice for every recipient who has a CIEL PK account.
+      const who =
+        input.decidedBy === 'faculty'
+          ? 'the faculty supervisor'
+          : input.decidedBy === 'partner'
+            ? 'the partner organization'
+            : 'CIEL PK';
+      const title =
+        input.action === 'rejected'
+          ? 'Opportunity rejected'
+          : 'Status updated: revision requested';
+      const message =
+        input.action === 'rejected'
+          ? `"${opportunity.title}" was permanently rejected by ${who}.`
+          : `"${opportunity.title}" was sent back to the creator for revision by ${who}.`;
+      const users = await this.usersRepository
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.email'])
+        .where('LOWER(TRIM(u.email)) IN (:...emails)', {
+          emails: recipients.map((r) => r.email),
+        })
+        .getMany();
+      for (const u of users) {
+        try {
+          await this.notificationsService.createApprovalNotification(
+            u.id,
+            title,
+            input.reason ? `${message}\n\nReason: ${input.reason}` : message,
+          );
+        } catch (error) {
+          console.warn(
+            'Failed to create stakeholder decision notification',
+            (error as Error).message,
+          );
+        }
+      }
+    } catch (error) {
+      console.warn('Stakeholder decision notices failed', {
+        opportunityId: opportunity.id,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  /** Has the opportunity reached the partner yet? (Student flow: partner review starts after faculty.) */
+  private partnerHasBeenEngaged(opportunity: Opportunity): boolean {
+    const partnerLine = String(opportunity.partnerApprovalStatus || '')
+      .trim()
+      .toLowerCase();
+    if (
+      partnerLine &&
+      partnerLine !== LINE_STATUS.PENDING &&
+      partnerLine !== LINE_STATUS.NOT_APPLICABLE
+    ) {
+      return true;
+    }
+    if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
+      return true;
+    }
+    if (opportunity.isStudentCreated) {
+      return opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
+    }
+    return opportunity.requiresPartnerApproval === true;
+  }
+
   async approve(id: string, actor?: ApprovalActor, rawInstructions?: unknown) {
     // Optional note for the creator ("basic instructions"); same trim + 2000-char cap as a reason.
     const instructions = this.normalizeDecisionReason(rawInstructions);
@@ -5860,6 +6005,12 @@ export class OpportunitiesService {
       emailSubject: 'Your opportunity was permanently rejected',
       reason,
     });
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'admin',
+      action: 'rejected',
+      reason,
+      creatorNotified: true,
+    });
     return saved;
   }
 
@@ -5888,6 +6039,12 @@ export class OpportunitiesService {
         'CIEL admin asked you to update your opportunity. Open your dashboard, make the changes, and save to resubmit.',
       emailSubject: 'Please revise your opportunity',
       reason,
+    });
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'admin',
+      action: 'revision_requested',
+      reason,
+      creatorNotified: true,
     });
     return saved;
   }
@@ -6269,6 +6426,13 @@ export class OpportunitiesService {
           : 'Partner requested revisions on your opportunity',
       reason,
     });
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'partner',
+      action: action === 'reject' ? 'rejected' : 'revision_requested',
+      reason,
+      actorEmail: linkActor.name,
+      creatorNotified: true,
+    });
     await this.inviteReviewingPartnerToJoin(saved);
 
     return {
@@ -6435,6 +6599,13 @@ export class OpportunitiesService {
         });
       }
     }
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'faculty',
+      action: action === 'reject' ? 'rejected' : 'revision_requested',
+      reason,
+      actorEmail: linkActor.name,
+      creatorNotified: !!(saved.isStudentCreated && saved.creatorId),
+    });
 
     return {
       success: true,
@@ -7301,6 +7472,13 @@ export class OpportunitiesService {
         }
       }
     }
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'faculty',
+      action: 'rejected',
+      reason,
+      actorEmail: facultyEmail,
+      creatorNotified: !!(opp.isStudentCreated && opp.creatorId),
+    });
     return saved;
   }
 
@@ -7342,6 +7520,13 @@ export class OpportunitiesService {
         reason,
       });
     }
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'faculty',
+      action: 'revision_requested',
+      reason,
+      actorEmail: facultyEmail,
+      creatorNotified: !!saved.isStudentCreated,
+    });
     return saved;
   }
 
@@ -7427,6 +7612,13 @@ export class OpportunitiesService {
         reason,
       });
     }
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'partner',
+      action: 'rejected',
+      reason,
+      actorEmail: partner.email,
+      creatorNotified: !!saved.isStudentCreated,
+    });
 
     return saved;
   }
@@ -7463,6 +7655,13 @@ export class OpportunitiesService {
         'Your partner organization asked you to update your opportunity. Save your changes to resubmit for review.',
       emailSubject: 'Partner requested revisions on your opportunity',
       reason,
+    });
+    await this.notifyStakeholdersOfDecision(saved, {
+      decidedBy: 'partner',
+      action: 'revision_requested',
+      reason,
+      actorEmail: partner.email,
+      creatorNotified: true,
     });
 
     return saved;

@@ -20,10 +20,12 @@ export class FeedbackService {
     dto: CreateCepSurveyResponseDto,
     surveyVersion = 'cep_report_v1',
   ) {
+    const reportId = (dto.reportId || '').trim().slice(0, 64) || null;
     const row = this.cepRepo.create({
       userId,
       userRole: (userRole || 'unknown').slice(0, 32),
-      surveyVersion,
+      surveyVersion: reportId ? 'cep_result_v1' : surveyVersion,
+      reportId,
       overallRating: dto.overallRating,
       sectionsEase: dto.sectionsEase,
       reflectImpact: dto.reflectImpact,
@@ -32,6 +34,17 @@ export class FeedbackService {
     });
     const saved = await this.cepRepo.save(row);
     return { success: true, id: saved.id };
+  }
+
+  /** Has this user already given feedback for this report's result package? */
+  async hasSubmittedForReport(
+    userId: string,
+    reportId: string,
+  ): Promise<boolean> {
+    const id = (reportId || '').trim();
+    if (!id) return false;
+    const count = await this.cepRepo.count({ where: { userId, reportId: id } });
+    return count > 0;
   }
 
   /** Admin list: post-report CEP experience survey submissions. */
@@ -68,6 +81,7 @@ export class FeedbackService {
           user_role: row.userRole,
           account_role: user?.role ?? null,
           survey_version: row.surveyVersion,
+          report_id: row.reportId ?? null,
           overall_rating: row.overallRating,
           sections_ease: row.sectionsEase,
           reflect_impact: row.reflectImpact,

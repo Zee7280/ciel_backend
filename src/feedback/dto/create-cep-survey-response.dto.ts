@@ -38,4 +38,10 @@ export class CreateCepSurveyResponseDto {
   @IsString()
   @MaxLength(2000)
   improvementText?: string;
+
+  /** Set when the form is the gate in front of a verified report's result package. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  reportId?: string;
 }

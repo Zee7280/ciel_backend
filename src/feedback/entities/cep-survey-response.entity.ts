@@ -23,6 +23,11 @@ export class CepSurveyResponse {
   @Column({ type: 'varchar', length: 32, default: 'cep_report_v1' })
   surveyVersion: string;
 
+  /** The verified report whose result package this feedback unlocked (null for the older general prompt). */
+  @Index()
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  reportId: string | null;
+
   @Column({ type: 'int' })
   overallRating: number;
 

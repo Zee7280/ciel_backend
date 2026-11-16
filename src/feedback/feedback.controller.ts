@@ -1,4 +1,12 @@
-import { Body, Controller, Post, Request, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FeedbackService } from './feedback.service';
 import { CreateCepSurveyResponseDto } from './dto/create-cep-survey-response.dto';
@@ -7,6 +15,19 @@ import { CreateCepSurveyResponseDto } from './dto/create-cep-survey-response.dto
 @UseGuards(JwtAuthGuard)
 export class FeedbackController {
   constructor(private readonly feedbackService: FeedbackService) {}
+
+  /** Result-package gate: has the signed-in user already given feedback for this report? */
+  @Get('cep-experience/status')
+  async cepStatus(
+    @Request() req: { user: { id: string } },
+    @Query('reportId') reportId?: string,
+  ) {
+    const submitted = await this.feedbackService.hasSubmittedForReport(
+      req.user.id,
+      reportId || '',
+    );
+    return { success: true, submitted };
+  }
 
   /** CEP / Community Engagement report experience (student-focused; any logged-in role may submit). */
   @Post('cep-experience')

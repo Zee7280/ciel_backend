@@ -954,6 +954,83 @@ export class MailService {
     }
   }
 
+  /**
+   * One-time team roster notice: who joined and/or who left a project team. Sent to every member
+   * of the team (the newly added get their own "you were added" mail instead) and, when the lead
+   * removed someone, to that person.
+   */
+  async sendTeamRosterChanged(params: {
+    to: string;
+    projectTitle: string;
+    projectId: string;
+    teamDisplayName?: string | null;
+    leadName: string;
+    added: string[];
+    removed: string[];
+    /** The recipient is the person who was removed. */
+    youWereRemoved?: boolean;
+  }) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(params.projectTitle || 'your project');
+    const leadEsc = this.escHtmlPlain(
+      params.leadName?.trim() || 'Your team lead',
+    );
+    const list = (names: string[]) =>
+      names.map((n) => `<li>${this.escHtmlPlain(n)}</li>`).join('');
+    const teamLine = params.teamDisplayName?.trim()
+      ? `<p>Team: <strong>${this.escHtmlPlain(params.teamDisplayName.trim())}</strong></p>`
+      : '';
+    const link = this.buildFrontendLink(
+      params.youWereRemoved
+        ? '/dashboard/student/paths/community-service'
+        : `/dashboard/student/projects/${encodeURIComponent(params.projectId)}/participation`,
+      {},
+    );
+    const heading = params.youWereRemoved
+      ? 'You were removed from a project team'
+      : 'Your project team changed';
+    const body = params.youWereRemoved
+      ? `<p>${leadEsc} removed you from the team on <strong>${titleEsc}</strong> on CIEL PK. Your logged attendance on this project no longer counts towards its report. If this is a mistake, contact your team lead.</p>`
+      : `<p>${leadEsc} updated the team on <strong>${titleEsc}</strong>:</p>` +
+        (params.added.length
+          ? `<p><strong>Joined</strong></p><ul>${list(params.added)}</ul>`
+          : '') +
+        (params.removed.length
+          ? `<p><strong>Left the team</strong></p><ul>${list(params.removed)}</ul>`
+          : '') +
+        '<p>This is a one-time notice so everyone on the team knows who is on it now.</p>';
+    const subject = params.youWereRemoved
+      ? `You were removed from the team on ${params.projectTitle}`
+      : `Team update on ${params.projectTitle}: ${[
+          params.added.length ? `${params.added.length} joined` : '',
+          params.removed.length ? `${params.removed.length} left` : '',
+        ]
+          .filter(Boolean)
+          .join(', ')}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${heading}</h2>
+        ${body}
+        ${teamLine}
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${link}" style="background-color: #0e7d74; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">${params.youWereRemoved ? 'Open Community Service' : 'Open member portal'}</a>
+        </div>
+        <p>Best regards,<br><strong>The CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({ from, to: params.to, subject, html });
+      this.logger.log(`Team roster change email sent to ${params.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send team roster change email to ${params.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
   async sendTeamMemberAddedToProject(params: {
     to: string;
     leadName: string;

@@ -45,6 +45,15 @@ function isLowProgressReportStatus(status: string | null | undefined): boolean {
   );
 }
 
+function memberDisplayName(row: Participation): string {
+  return (
+    row.student?.name ||
+    row.fullName ||
+    row.email ||
+    'Team member'
+  ).trim();
+}
+
 @Injectable()
 export class TeamFormationService {
   constructor(
@@ -279,9 +288,152 @@ export class TeamFormationService {
         teamDisplayName: result.team_display_name,
         memberParticipationIds: result.newly_linked_participation_ids,
       });
+      // Everyone already on the team (lead included) hears who joined — once, on this change.
+      const newlyLinked = new Set(result.newly_linked_participation_ids);
+      await this.notifyTeamRosterChange({
+        projectId,
+        opportunity,
+        teamId: result.team_id,
+        applicationId: leadApplicationId ?? null,
+        leadName,
+        teamDisplayName: result.team_display_name,
+        added: members
+          .filter((m) => newlyLinked.has(m.id))
+          .map((m) => memberDisplayName(m)),
+        removed: [],
+        excludeParticipationIds: [...newlyLinked],
+      });
     }
 
     return result;
+  }
+
+  /**
+   * One-time notice to the whole team when its roster changes: who joined, who left. Every member
+   * still on the team (lead included) gets an email + in-app notice; a member the lead removed gets
+   * their own. Best-effort: a mail failure never fails the change that already happened.
+   */
+  async notifyTeamRosterChange(params: {
+    projectId: string;
+    opportunity?: Opportunity | null;
+    teamId?: string | null;
+    applicationId?: string | null;
+    leadName: string;
+    teamDisplayName?: string | null;
+    added: string[];
+    removed: Array<
+      | string
+      | {
+          name: string;
+          email?: string | null;
+          studentId?: string | null;
+          /** True when the person left by themselves (no "you were removed" mail). */
+          self?: boolean;
+        }
+    >;
+    excludeParticipationIds?: string[];
+  }): Promise<{ notified: number }> {
+    const removedRows = params.removed.map((r) =>
+      typeof r === 'string' ? { name: r } : r,
+    );
+    if (!params.added.length && !removedRows.length) return { notified: 0 };
+    let notified = 0;
+    try {
+      const opportunity =
+        params.opportunity ??
+        (await this.opportunityRepo.findOne({
+          where: { id: params.projectId },
+        }));
+      const projectTitle = opportunity?.title || 'your project';
+      const teamId = (params.teamId || '').trim();
+      const applicationId = (params.applicationId || '').trim();
+      const where = teamId
+        ? {
+            projectId: params.projectId,
+            teamId,
+            status: In([...ACTIVE_STATUSES]),
+          }
+        : applicationId
+          ? {
+              projectId: params.projectId,
+              applicationId,
+              status: In([...ACTIVE_STATUSES]),
+            }
+          : null;
+      const team = where
+        ? await this.participationRepo.find({
+            where,
+            relations: ['student'],
+          })
+        : [];
+      const exclude = new Set(params.excludeParticipationIds ?? []);
+      const addedNames = params.added.filter(Boolean);
+      const removedNames = removedRows.map((r) => r.name).filter(Boolean);
+      const seen = new Set<string>();
+      for (const row of team) {
+        if (exclude.has(row.id)) continue;
+        const email = (row.student?.email || row.email || '').trim();
+        const key = email.toLowerCase() || row.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (email) {
+          await this.mailService.sendTeamRosterChanged({
+            to: email,
+            projectTitle,
+            projectId: params.projectId,
+            teamDisplayName: params.teamDisplayName ?? row.teamDisplayName,
+            leadName: params.leadName,
+            added: addedNames,
+            removed: removedNames,
+          });
+        }
+        if (row.studentId) {
+          await this.notificationsService.createNotification(row.studentId, {
+            type: 'team',
+            title: 'Your project team changed',
+            message: [
+              `${projectTitle}:`,
+              addedNames.length ? `joined — ${addedNames.join(', ')}.` : '',
+              removedNames.length ? `left — ${removedNames.join(', ')}.` : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          });
+        }
+        notified += 1;
+      }
+      for (const r of removedRows) {
+        if (r.self) continue;
+        const email = (r.email || '').trim();
+        if (email) {
+          await this.mailService.sendTeamRosterChanged({
+            to: email,
+            projectTitle,
+            projectId: params.projectId,
+            teamDisplayName: params.teamDisplayName,
+            leadName: params.leadName,
+            added: [],
+            removed: [r.name],
+            youWereRemoved: true,
+          });
+        }
+        if (r.studentId) {
+          await this.notificationsService.createNotification(r.studentId, {
+            type: 'team',
+            title: 'You were removed from a project team',
+            message: `${params.leadName} removed you from the team on ${projectTitle}. Contact your team lead if this is a mistake.`,
+          });
+        }
+        notified += 1;
+      }
+    } catch (error) {
+      // Never let a notice failure undo or block the roster change itself.
+      console.warn('Team roster change notice failed', {
+        projectId: params.projectId,
+        error: (error as Error).message,
+      });
+    }
+    return { notified };
   }
 
   private async notifyLinkedTeamMembers(params: {

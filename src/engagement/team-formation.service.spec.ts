@@ -9,7 +9,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 
 describe('TeamFormationService', () => {
   let service: TeamFormationService;
-  let mailService: { sendTeamMemberAddedToProject: jest.Mock };
+  let mailService: {
+    sendTeamMemberAddedToProject: jest.Mock;
+    sendTeamRosterChanged: jest.Mock;
+  };
   let notificationsService: { createNotification: jest.Mock };
 
   const leadRow = {
@@ -90,6 +93,7 @@ describe('TeamFormationService', () => {
     jest.clearAllMocks();
     mailService = {
       sendTeamMemberAddedToProject: jest.fn().mockResolvedValue(undefined),
+      sendTeamRosterChanged: jest.fn().mockResolvedValue(undefined),
     };
     notificationsService = {
       createNotification: jest.fn().mockResolvedValue(undefined),
@@ -272,6 +276,142 @@ describe('TeamFormationService', () => {
           twenty.map((m) => m.id),
         ),
       ).rejects.toThrow(/at most 20/);
+    });
+  });
+
+  describe('one-time roster notices', () => {
+    const existingMember = {
+      id: 'old-1',
+      studentId: 'student-old',
+      projectId: 'proj-1',
+      participationMode: 'team',
+      isTeamLead: false,
+      teamId: 'TM-MINE',
+      status: 'approved',
+      email: 'old@test.edu',
+      student: { name: 'Omar Old', email: 'old@test.edu' },
+    };
+
+    it('tells everyone already on the team who joined; the newcomer only gets the "added" mail', async () => {
+      mockParticipationRepo.findOne.mockResolvedValue({
+        ...leadRow,
+        teamId: 'TM-MINE',
+        isTeamLead: true,
+        participationMode: 'team',
+        email: 'lead@test.edu',
+        student: { name: 'Ali Hassan', email: 'lead@test.edu' },
+      });
+      mockParticipationRepo.find.mockImplementation(
+        (opts: { where?: { id?: unknown; teamId?: unknown } }) => {
+          if (opts?.where && (opts.where as { id?: unknown }).id) {
+            return Promise.resolve([{ ...memberRow, teamId: null }]);
+          }
+          return Promise.resolve([
+            {
+              ...leadRow,
+              teamId: 'TM-MINE',
+              isTeamLead: true,
+              email: 'lead@test.edu',
+              student: { name: 'Ali Hassan', email: 'lead@test.edu' },
+            },
+            { ...existingMember },
+            { ...memberRow, teamId: 'TM-MINE' },
+          ]);
+        },
+      );
+
+      await service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']);
+
+      const rosterTo = mailService.sendTeamRosterChanged.mock.calls.map(
+        (c: [{ to: string; added: string[] }]) => c[0].to,
+      );
+      expect(rosterTo.sort()).toEqual(['lead@test.edu', 'old@test.edu']);
+      expect(mailService.sendTeamRosterChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ added: ['Sara Khan'], removed: [] }),
+      );
+      expect(rosterTo).not.toContain('member@test.edu');
+      expect(mailService.sendTeamMemberAddedToProject).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
+        'student-old',
+        expect.objectContaining({ title: 'Your project team changed' }),
+      );
+    });
+
+    it('a lead removing a member: the rest of the team hears it, the person gets their own notice', async () => {
+      mockParticipationRepo.find.mockResolvedValue([
+        {
+          ...leadRow,
+          teamId: 'TM-MINE',
+          email: 'lead@test.edu',
+          student: { name: 'Ali', email: 'lead@test.edu' },
+        },
+        { ...existingMember },
+      ]);
+      const out = await service.notifyTeamRosterChange({
+        projectId: 'proj-1',
+        teamId: 'TM-MINE',
+        leadName: 'Ali Hassan',
+        added: [],
+        removed: [
+          {
+            name: 'Sara Khan',
+            email: 'member@test.edu',
+            studentId: 'student-mem',
+          },
+        ],
+      });
+      expect(out.notified).toBe(3);
+      expect(mailService.sendTeamRosterChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'old@test.edu',
+          removed: ['Sara Khan'],
+          added: [],
+        }),
+      );
+      expect(mailService.sendTeamRosterChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'member@test.edu',
+          youWereRemoved: true,
+        }),
+      );
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
+        'student-mem',
+        expect.objectContaining({
+          title: 'You were removed from a project team',
+        }),
+      );
+    });
+
+    it('a member leaving by themselves gets no "removed" mail; nothing goes out without a change', async () => {
+      mockParticipationRepo.find.mockResolvedValue([{ ...existingMember }]);
+      await service.notifyTeamRosterChange({
+        projectId: 'proj-1',
+        teamId: 'TM-MINE',
+        leadName: 'Sara Khan',
+        added: [],
+        removed: [
+          {
+            name: 'Sara Khan',
+            email: 'member@test.edu',
+            studentId: 'student-mem',
+            self: true,
+          },
+        ],
+      });
+      const to = mailService.sendTeamRosterChanged.mock.calls.map(
+        (c: [{ to: string }]) => c[0].to,
+      );
+      expect(to).toEqual(['old@test.edu']);
+      mailService.sendTeamRosterChanged.mockClear();
+      const none = await service.notifyTeamRosterChange({
+        projectId: 'proj-1',
+        teamId: 'TM-MINE',
+        leadName: 'x',
+        added: [],
+        removed: [],
+      });
+      expect(none.notified).toBe(0);
+      expect(mailService.sendTeamRosterChanged).not.toHaveBeenCalled();
     });
   });
 });

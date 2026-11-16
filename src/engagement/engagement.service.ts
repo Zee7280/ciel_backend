@@ -73,6 +73,7 @@ import {
 import { resolveParticipationForAttendanceUnlock } from './attendance-unlock.util';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
+import { TeamFormationService } from './team-formation.service';
 import * as crypto from 'crypto';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { hecHourTier } from '../common/hec-hour-tier';
@@ -139,6 +140,7 @@ export class EngagementService {
     private s3Service: S3Service,
     private mailService: MailService,
     @Optional() private readonly issueLogsService?: IssueLogsService,
+    @Optional() private readonly teamFormationService?: TeamFormationService,
   ) {
     const configuredKey = this.configService.get<string>('ENCRYPTION_KEY');
     if (!configuredKey && process.env.NODE_ENV === 'production') {
@@ -1451,7 +1453,7 @@ export class EngagementService {
   async deleteParticipant(requesterUserId: string, participantId: string) {
     const participation = await this.participantRepository.findOne({
       where: { id: participantId },
-      relations: ['attendanceLogs'],
+      relations: ['attendanceLogs', 'student'],
     });
 
     if (!participation) {
@@ -1504,7 +1506,48 @@ export class EngagementService {
       }
     }
 
+    // Snapshot before the row is gone: the team notice needs the team key and the person.
+    const removedTeamId = (participation.teamId || '').trim();
+    const removedApplicationId = (participation.applicationId || '').trim();
+    const wasOnTeam =
+      participation.participationMode === 'team' || Boolean(removedTeamId);
+    const removedName = (
+      participation.student?.name ||
+      participation.fullName ||
+      participation.email ||
+      'A team member'
+    ).trim();
+    const removedEmail = (
+      participation.student?.email ||
+      participation.email ||
+      ''
+    ).trim();
+    const removedStudentId = participation.studentId || null;
+    const projectId = participation.projectId;
+
     await this.participantRepository.remove(participation);
+
+    // One-time notice to the rest of the team (and to the person, when the lead removed them).
+    if (wasOnTeam && this.teamFormationService) {
+      const leadName = isSelf
+        ? removedName
+        : (requester.name || requester.email || 'Your team lead').trim();
+      await this.teamFormationService.notifyTeamRosterChange({
+        projectId,
+        teamId: removedTeamId || null,
+        applicationId: removedApplicationId || null,
+        leadName,
+        added: [],
+        removed: [
+          {
+            name: removedName,
+            email: removedEmail,
+            studentId: removedStudentId,
+            self: Boolean(isSelf),
+          },
+        ],
+      });
+    }
     return { success: true };
   }
 

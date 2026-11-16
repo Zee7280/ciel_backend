@@ -13,6 +13,7 @@ import { Otp } from '../students/entities/otp.entity';
 import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
+import { TeamFormationService } from './team-formation.service';
 import { UserRole } from '../users/enums/user-role.enum';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
@@ -105,6 +106,10 @@ describe('EngagementService', () => {
     sendAttendanceDecisionNoticeToStudent: jest.fn(),
   };
 
+  const mockTeamFormation = {
+    notifyTeamRosterChange: jest.fn().mockResolvedValue({ notified: 0 }),
+  };
+
   const mockParticipationQueryBuilder = (result: Participation | null) => ({
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
@@ -175,6 +180,7 @@ describe('EngagementService', () => {
           provide: MailService,
           useValue: mockMailService,
         },
+        { provide: TeamFormationService, useValue: mockTeamFormation },
       ],
     }).compile();
 
@@ -2746,6 +2752,67 @@ describe('EngagementService', () => {
       expect(asNgo[0].evidenceUrl).toBeNull();
       const asStudent = await service.getAttendanceLogs('p1', 'student');
       expect(asStudent[0].evidenceUrl).toContain('attendance-evidence');
+    });
+  });
+
+  describe('deleteParticipant roster notice', () => {
+    it('a lead removing a teammate tells the rest of the team and the removed person', async () => {
+      mockTeamFormation.notifyTeamRosterChange.mockClear();
+      const repo = mockParticipationRepository as unknown as Record<
+        string,
+        jest.Mock
+      >;
+      const users = mockUserRepository as unknown as Record<string, jest.Mock>;
+      repo.findOne = jest
+        .fn()
+        .mockResolvedValueOnce({
+          id: 'seat-m',
+          projectId: 'proj-1',
+          studentId: 'stu-m',
+          email: 'member@test.edu',
+          fullName: 'Sara Khan',
+          participationMode: 'team',
+          isTeamLead: false,
+          teamId: 'TM-1',
+          applicationId: 'app-1',
+          student: { name: 'Sara Khan', email: 'member@test.edu' },
+          attendanceLogs: [],
+        })
+        .mockResolvedValueOnce({
+          id: 'seat-lead',
+          projectId: 'proj-1',
+          studentId: 'stu-lead',
+          participationMode: 'team',
+          isTeamLead: true,
+          teamId: 'TM-1',
+          applicationId: 'app-1',
+        });
+      repo.remove = jest.fn().mockResolvedValue(undefined);
+      users.findOne = jest.fn().mockResolvedValue({
+        id: 'stu-lead',
+        name: 'Ali Hassan',
+        email: 'lead@test.edu',
+      });
+
+      await service.deleteParticipant('stu-lead', 'seat-m');
+
+      expect(repo.remove).toHaveBeenCalledTimes(1);
+      expect(mockTeamFormation.notifyTeamRosterChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'proj-1',
+          teamId: 'TM-1',
+          leadName: 'Ali Hassan',
+          added: [],
+          removed: [
+            {
+              name: 'Sara Khan',
+              email: 'member@test.edu',
+              studentId: 'stu-m',
+              self: false,
+            },
+          ],
+        }),
+      );
     });
   });
 });

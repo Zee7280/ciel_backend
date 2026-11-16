@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ReportRemindersModule } from '../report-reminders/report-reminders.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -48,6 +49,7 @@ import { AdminOtpLookupService } from './admin-otp-lookup.service';
     NotificationsModule,
     CommunityAwardModule,
     FacultyModule,
+    ReportRemindersModule,
     NpeRankingModule,
     TypeOrmModule.forFeature([
       User,

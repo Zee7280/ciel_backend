@@ -21,6 +21,7 @@ import { NpeRankingModule } from '../ranking/npe-ranking.module';
 import { FacultyCommunityServiceController } from './faculty-community-service.controller';
 import { AiModule } from '../ai/ai.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ReportRemindersModule } from '../report-reminders/report-reminders.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     NpeRankingModule,
     AiModule,
     NotificationsModule,
+    ReportRemindersModule,
   ],
   controllers: [
     FacultyReportsController,

@@ -14,6 +14,7 @@ import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { FollowUpsModule } from '../followups/followups.module';
+import { ReportRemindersModule } from '../report-reminders/report-reminders.module';
 import { HubJobsDisabledController } from './hub-jobs-disabled.controller';
 import { isHubEnabled } from '../integration-hub/hub-connection.constants';
 
@@ -25,6 +26,7 @@ import { isHubEnabled } from '../integration-hub/hub-connection.constants';
     NotificationsModule,
     AuditLogsModule,
     FollowUpsModule,
+    ReportRemindersModule,
   ],
   controllers: [
     InternalJobsController,

@@ -563,3 +563,59 @@ export function isCommunityAwardMedalReport(input: {
     facultySignedOff && (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall))
   );
 }
+
+/** Goal number 1–17 from an SDG id / number / "SDG 12" / "12.5" style value; null otherwise. */
+function sdgGoalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value >= 1 && value <= 17 ? value : null;
+  }
+  if (typeof value !== 'string') return null;
+  const m = value.trim().match(/^\D*?(\d{1,2})(?:\D|$)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 1 && n <= 17 ? n : null;
+}
+
+/**
+ * Every SDG on a report's flashcard: the report's own mapping (Section 3 primary + supporting,
+ * rejected supporting goals skipped) plus the goals chosen when the opportunity was created
+ * (primary + all supporting). Report primary first, then the rest in the order they appear.
+ */
+export function collectReportSdgGoals(report: {
+  primary_sdg_goal?: number | null;
+  section3?: unknown;
+  opportunity?: unknown;
+}): number[] {
+  const out: number[] = [];
+  const push = (value: unknown) => {
+    const n = sdgGoalNumber(value);
+    if (n != null && !out.includes(n)) out.push(n);
+  };
+  const rec = (v: unknown): Record<string, unknown> | null =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : null;
+
+  const s3 = rec(report.section3);
+  push(rec(s3?.primary_sdg)?.goal_number);
+  push(report.primary_sdg_goal);
+
+  const opp = rec(report.opportunity);
+  const info = rec(opp?.sdg_info);
+  push(info?.sdg_id ?? info?.id);
+  push(opp?.sdg);
+  if (Array.isArray(opp?.secondary_sdgs)) {
+    for (const row of opp.secondary_sdgs) {
+      const r = rec(row);
+      push(r ? (r.sdg_id ?? r.id ?? r.goal_number) : row);
+    }
+  }
+  if (Array.isArray(s3?.secondary_sdgs)) {
+    for (const row of s3.secondary_sdgs) {
+      const r = rec(row);
+      if (!r || r.status === 'rejected') continue;
+      push(r.goal_number);
+    }
+  }
+  return out;
+}

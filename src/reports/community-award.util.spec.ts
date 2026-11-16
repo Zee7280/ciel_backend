@@ -10,6 +10,7 @@ import {
   resolveReportFlashEvidence,
   resolveReportFlashHours,
   resolveReportDisplayHours,
+  collectReportSdgGoals,
   resolveReportFlashOutcomes,
   resolveReportFlashSessions,
   scoreCommunityAward,
@@ -455,5 +456,36 @@ describe('resolveReportDisplayHours — what every screen shows', () => {
     ).toBe(3);
     expect(resolveReportDisplayHours({ team_lead: { hours: 16 } })).toBe(16);
     expect(resolveReportDisplayHours({}, 12)).toBe(12);
+  });
+});
+
+describe('collectReportSdgGoals', () => {
+  it('joins the report mapping and the opportunity SDGs, report primary first, no duplicates', () => {
+    expect(
+      collectReportSdgGoals({
+        section3: {
+          primary_sdg: { goal_number: 12 },
+          secondary_sdgs: [
+            { goal_number: 4, status: 'validated' },
+            { goal_number: 5, status: 'rejected' },
+          ],
+        },
+        opportunity: {
+          sdg_info: { sdg_id: '11' },
+          secondary_sdgs: [{ sdg_id: '12' }, { sdg_id: '13' }],
+        },
+      }),
+    ).toEqual([12, 11, 13, 4]);
+  });
+
+  it('falls back to the stored primary goal and ignores junk', () => {
+    expect(
+      collectReportSdgGoals({
+        primary_sdg_goal: 3,
+        section3: null,
+        opportunity: { sdg: 'SDG 6', secondary_sdgs: ['x', 99] },
+      }),
+    ).toEqual([3, 6]);
+    expect(collectReportSdgGoals({})).toEqual([]);
   });
 });

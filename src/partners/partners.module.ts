@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ReportRemindersModule } from '../report-reminders/report-reminders.module';
 import {
   PartnersController,
   PartnerAliasController,
@@ -25,6 +26,7 @@ import { FacultyModule } from '../faculty/faculty.module';
     CommunityAwardModule,
     NpeRankingModule,
     FacultyUniversityScopeModule,
+    ReportRemindersModule,
     FacultyModule,
   ],
   controllers: [PartnersController, PartnerAliasController],

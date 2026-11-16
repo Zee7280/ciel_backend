@@ -149,3 +149,56 @@ describe('PlatformJobsService nightly record-id backfill', () => {
     expect(out.record_ids_error).toBeNull();
   });
 });
+
+describe('PlatformJobsService report reminders', () => {
+  const sla = {
+    processPartnerAttendanceSla: jest
+      .fn()
+      .mockResolvedValue({ reminders_sent: 0, escalated: 0, scanned: 0 }),
+  };
+  const rec = {
+    reconcileEnrollmentMetadata: jest.fn().mockResolvedValue({
+      display_names_backfilled: 0,
+      duplicate_leads_normalized: 0,
+      scanned_teams: 0,
+    }),
+  };
+
+  it('runs the due reminders as part of the nightly job and reports the counts', async () => {
+    const runDue = jest.fn().mockResolvedValue({
+      today: '2026-11-16',
+      opportunities_scanned: 4,
+      students_scanned: 9,
+      sent: 3,
+      skipped: 6,
+      failed: 0,
+    });
+    const service = new PlatformJobsService(
+      sla as never,
+      rec as never,
+      undefined,
+      undefined,
+      undefined,
+      { runDue } as never,
+    );
+    const out = await service.runNightlyJobsNow('vercel-cron');
+    expect(runDue).toHaveBeenCalledTimes(1);
+    expect(out.report_reminders?.sent).toBe(3);
+    expect(out.success).toBe(true);
+  });
+
+  it('a reminder failure is reported but does not fail the nightly jobs', async () => {
+    const service = new PlatformJobsService(
+      sla as never,
+      rec as never,
+      undefined,
+      undefined,
+      undefined,
+      { runDue: jest.fn().mockRejectedValue(new Error('mail down')) } as never,
+    );
+    const out = await service.runNightlyJobsNow('vercel-cron');
+    expect(out.success).toBe(true);
+    expect(out.report_reminders).toBeNull();
+    expect(out.report_reminders_error).toBe('mail down');
+  });
+});

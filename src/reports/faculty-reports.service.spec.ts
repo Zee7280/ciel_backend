@@ -1646,6 +1646,76 @@ describe('FacultyReportsService — project tracking (assigned students + live h
     expect(res.data.map((r) => r.project_id)).toEqual(['opp-named']);
   });
 
+  it('tracking rows carry the deadline and the last "Complete your report" reminder', async () => {
+    const {
+      service,
+      facultyService,
+      participationRepository,
+      opportunitiesRepository,
+      attendanceLogsRepository,
+      qb,
+    } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Community survey',
+        status: 'active',
+        workflowStage: 'live',
+        admin_approved: true,
+        timeline: {
+          start_date: '2000-01-01',
+          end_date: '2000-01-31',
+          reporting_window_reopened_until: '2999-12-31',
+        },
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([
+      {
+        id: 'seat-1',
+        projectId: 'opp-1',
+        studentId: 'stu-1',
+        fullName: 'Ayesha Khan',
+        email: 'ayesha@uni.edu',
+        student: { id: 'stu-1', name: 'Ayesha Khan', email: 'ayesha@uni.edu' },
+        updatedAt: new Date('2026-04-01'),
+        createdAt: new Date('2026-03-01'),
+      },
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
+    const summaryByOpportunity = jest.fn().mockResolvedValue(
+      new Map([
+        [
+          'opp-1|ayesha@uni.edu',
+          {
+            last_reminder_at: '2026-11-10T00:00:00.000Z',
+            last_reminder_kind: 'after_end_d1',
+            last_reminder_channel: 'auto',
+            reminders_sent: 2,
+          },
+        ],
+      ]),
+    );
+    (service as unknown as { reportReminders: unknown }).reportReminders = {
+      summaryByOpportunity,
+    };
+
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+
+    expect(summaryByOpportunity).toHaveBeenCalledWith(['opp-1']);
+    expect(res.data[0]).toMatchObject({
+      project_end_date: '2000-01-31',
+      reporting_close_date: '2999-12-31',
+      deadline_phase: 'reporting_window',
+      last_reminder_at: '2026-11-10T00:00:00.000Z',
+      last_reminder_channel: 'auto',
+      reminders_sent: 2,
+    });
+    expect(typeof res.data[0].days_left_to_report).toBe('number');
+  });
+
   it('returns an empty list when the faculty has no scoped opportunities', async () => {
     const { service, facultyService } = makeService(null);
     facultyService.getScopedOpportunityIds.mockResolvedValue([]);

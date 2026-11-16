@@ -22,6 +22,8 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { FacultyService } from './faculty.service';
+import { ReportRemindersService } from '../report-reminders/report-reminders.service';
 
 /** Request user as populated by JwtStrategy.validate. */
 type FacultyRequest = { user: { id: string; email: string } };
@@ -37,6 +39,8 @@ export class FacultyCommunityServiceController {
     private readonly opportunitiesService: OpportunitiesService,
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
+    private readonly facultyService: FacultyService,
+    private readonly reportReminders: ReportRemindersService,
   ) {}
 
   /**
@@ -49,6 +53,32 @@ export class FacultyCommunityServiceController {
       req.user.id,
       req.user.email,
     );
+  }
+
+  /**
+   * "Remind now": sends the standard "Complete your report ASAP" message (email + in-app) to the
+   * students on one of this faculty's projects whose report is not submitted. Once per student per
+   * day; the tracking row shows when it went.
+   */
+  @Post('tracking/:opportunityId/remind')
+  async remindNow(
+    @Request() req: FacultyRequest,
+    @Param('opportunityId') opportunityId: string,
+    @Body() body?: { student_email?: string },
+  ) {
+    const scoped = await this.facultyService.getScopedOpportunityIds(
+      req.user.id,
+      req.user.email,
+    );
+    if (!scoped.includes(opportunityId)) {
+      throw new NotFoundException('Project not found or not assigned to you');
+    }
+    const data = await this.reportReminders.remindNow(
+      opportunityId,
+      { role: 'faculty', email: req.user.email },
+      body?.student_email,
+    );
+    return { success: true, data };
   }
 
   /** Read-only pool for linked projects. Faculty cannot run or publish Ruberix ranking. */

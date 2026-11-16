@@ -51,6 +51,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 import { PlatformJobsService } from '../jobs/platform-jobs.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
+import { ReportRemindersService } from '../report-reminders/report-reminders.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import {
@@ -121,6 +122,7 @@ export class AdminController {
     private readonly facultyReportsService: FacultyReportsService,
     private readonly moduleRef: ModuleRef,
     private readonly adminOtpLookup: AdminOtpLookupService,
+    private readonly reportReminders: ReportRemindersService,
   ) {}
 
   /** Same run as the 02:00 PKT Vercel Cron; result is also written to the audit log. */
@@ -513,6 +515,35 @@ export class AdminController {
       id: req.user?.id,
       email: req.user?.email,
     });
+  }
+
+  /** National live tracking: every CIEL-approved listing, same rows as the faculty / partner hubs. */
+  @Get('community-service/tracking')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityTracking() {
+    const ids =
+      await this.facultyReportsService.listApprovedTrackingOpportunityIds();
+    return this.facultyReportsService.listProjectTrackingForOpportunities(ids, {
+      keepOpportunity: () => true,
+    });
+  }
+
+  /** "Remind now" from CIEL PK: standard "Complete your report ASAP" to a project's students. */
+  @Post('community-service/tracking/:opportunityId/remind')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityTrackingRemind(
+    @Request() req: AdminRequest,
+    @Param('opportunityId') opportunityId: string,
+    @Body() body?: { student_email?: string },
+  ) {
+    const data = await this.reportReminders.remindNow(
+      opportunityId,
+      { role: 'ciel_admin', email: req.user?.email },
+      body?.student_email,
+    );
+    return { success: true, data };
   }
 
   @Get('community-service/award-cards')

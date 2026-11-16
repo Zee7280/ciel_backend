@@ -54,6 +54,10 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
+import { Optional } from '@nestjs/common';
+import { ReportRemindersService } from '../report-reminders/report-reminders.service';
+import { describeReportDeadline } from '../report-reminders/report-reminder.util';
+import { karachiToday } from '../followups/followup.util';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -332,6 +336,8 @@ export class FacultyReportsService {
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
     private readonly s3Service: S3Service,
+    /** Reminder log for the tracking "communication bar"; optional so older wiring keeps working. */
+    @Optional() private readonly reportReminders?: ReportRemindersService,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -596,6 +602,64 @@ export class FacultyReportsService {
     }
 
     const delegation = await this.delegationFilter(facultyId, facultyEmail);
+    // Private / Independent Candidate listings stay off this list unless CIEL PK or the student
+    // named this faculty on the listing itself (then they supervise it like any other project).
+    const facultyEmailKey = String(facultyEmail || '')
+      .trim()
+      .toLowerCase();
+    const namesThisFaculty = (opp: Opportunity): boolean => {
+      if (opp.facultyId && String(opp.facultyId) === String(facultyId)) {
+        return true;
+      }
+      const contact = (opp.supervision as { contact?: unknown } | null)
+        ?.contact;
+      return (
+        !!facultyEmailKey &&
+        typeof contact === 'string' &&
+        contact.trim().toLowerCase() === facultyEmailKey
+      );
+    };
+    return this.listProjectTrackingForOpportunities(scopedOpportunityIds, {
+      restrictReports: (rows) =>
+        this.restrictDelegatedReports(rows, facultyId, facultyEmail),
+      // Seats on a delegated-only listing: the university's own students only (same rule as reports).
+      keepSeat: delegation.access
+        ? (seat) =>
+            delegation.isPersonalProject(seat.projectId) ||
+            delegation.access!.institutionalOpportunityIds.has(
+              seat.projectId,
+            ) ||
+            (!!seat.studentId &&
+              delegation.access!.studentIds.has(seat.studentId))
+        : undefined,
+      keepOpportunity: (opp) =>
+        !isPrivateStudentPathway(opp) || namesThisFaculty(opp),
+    });
+  }
+
+  /**
+   * Live tracking rows (assigned students, live hours, report progress, reminder state) for a set
+   * of opportunities. Faculty, partner / NGO / university and CIEL PK admin all read the same rows,
+   * each passing only the ids its own scope allows plus any extra row filters.
+   */
+  async listProjectTrackingForOpportunities(
+    opportunityIds: string[],
+    opts: {
+      /** Drop reports the caller may not see (e.g. a university's delegation rule). */
+      restrictReports?: (rows: StudentReport[]) => Promise<StudentReport[]>;
+      /** Drop seats the caller may not see. */
+      keepSeat?: (seat: Participation) => boolean;
+      /** Defaults to hiding Private / Independent Candidate listings. */
+      keepOpportunity?: (opp: Opportunity) => boolean;
+    } = {},
+  ) {
+    const scopedOpportunityIds = [
+      ...new Set(opportunityIds.filter((id) => typeof id === 'string' && id)),
+    ];
+    if (scopedOpportunityIds.length === 0) {
+      return { success: true, data: [] as Record<string, unknown>[] };
+    }
+
     const [opportunities, participantsAll, reportsAll, logs] =
       await Promise.all([
         this.opportunitiesRepository.find({
@@ -626,48 +690,19 @@ export class FacultyReportsService {
         }),
       ]);
 
-    const reports = await this.restrictDelegatedReports(
-      reportsAll,
-      facultyId,
-      facultyEmail,
-    );
-    // Seats on a delegated-only listing: the university's own students only (same rule as reports).
-    const participants = delegation.access
-      ? participantsAll.filter(
-          (seat) =>
-            delegation.isPersonalProject(seat.projectId) ||
-            delegation.access!.institutionalOpportunityIds.has(
-              seat.projectId,
-            ) ||
-            (!!seat.studentId &&
-              delegation.access!.studentIds.has(seat.studentId)),
-        )
+    const reports = opts.restrictReports
+      ? await opts.restrictReports(reportsAll)
+      : reportsAll;
+    const participants = opts.keepSeat
+      ? participantsAll.filter(opts.keepSeat)
       : participantsAll;
 
-    // Private / Independent Candidate listings stay off this list unless CIEL PK or the student
-    // named this faculty on the listing itself (then they supervise it like any other project).
-    const facultyEmailKey = String(facultyEmail || '')
-      .trim()
-      .toLowerCase();
-    const namesThisFaculty = (opp: Opportunity): boolean => {
-      if (opp.facultyId && String(opp.facultyId) === String(facultyId)) {
-        return true;
-      }
-      const contact = (opp.supervision as { contact?: unknown } | null)
-        ?.contact;
-      return (
-        !!facultyEmailKey &&
-        typeof contact === 'string' &&
-        contact.trim().toLowerCase() === facultyEmailKey
-      );
-    };
+    const keepOpportunity =
+      opts.keepOpportunity ??
+      ((opp: Opportunity) => !isPrivateStudentPathway(opp));
     const oppById = new Map(
       opportunities
-        .filter(
-          (opp) =>
-            !isRejectedOpportunity(opp) &&
-            (!isPrivateStudentPathway(opp) || namesThisFaculty(opp)),
-        )
+        .filter((opp) => !isRejectedOpportunity(opp) && keepOpportunity(opp))
         .map((opp) => [opp.id, opp]),
     );
     const allowedIds = new Set(oppById.keys());
@@ -915,6 +950,33 @@ export class FacultyReportsService {
       }
     }
 
+    // Communication bar: where each project stands against its reporting deadline and the last
+    // "Complete your report ASAP" reminder each student received (nightly job or Remind now).
+    const today = karachiToday();
+    const reminderSummary = this.reportReminders
+      ? await this.reportReminders.summaryByOpportunity([...allowedIds])
+      : new Map<string, never>();
+    for (const row of data) {
+      const projectId =
+        typeof row.project_id === 'string' ? row.project_id : '';
+      const deadline = describeReportDeadline(
+        oppById.get(projectId)?.timeline,
+        today,
+      );
+      row.project_end_date = deadline.end_date;
+      row.reporting_close_date = deadline.reporting_close_date;
+      row.days_left_to_report = deadline.days_left_to_report;
+      row.deadline_phase = deadline.phase;
+      const email =
+        typeof row.student_email === 'string' ? row.student_email : '';
+      const summary = reminderSummary.get(
+        ReportRemindersService.key(projectId, email),
+      );
+      row.last_reminder_at = summary?.last_reminder_at ?? null;
+      row.last_reminder_channel = summary?.last_reminder_channel ?? null;
+      row.reminders_sent = summary?.reminders_sent ?? 0;
+    }
+
     data.sort((a, b) => {
       const ta =
         Date.parse(
@@ -961,6 +1023,17 @@ export class FacultyReportsService {
       );
     }
     return byId;
+  }
+
+  /** Every CIEL-approved, not rejected listing (newest first) — the national tracking scope. */
+  async listApprovedTrackingOpportunityIds(limit = 400): Promise<string[]> {
+    const rows = await this.opportunitiesRepository.find({
+      where: { admin_approved: true },
+      select: ['id', 'status', 'workflowStage', 'updatedAt'],
+      order: { updatedAt: 'DESC' },
+      take: Math.max(1, Math.min(limit, 1000)),
+    });
+    return rows.filter((opp) => !isRejectedOpportunity(opp)).map((o) => o.id);
   }
 
   /** Same submit bar: rejected sessions do not count; pending sessions do. Clock fallback matches student wizard. */

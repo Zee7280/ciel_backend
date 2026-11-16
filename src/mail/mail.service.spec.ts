@@ -252,6 +252,60 @@ describe('MailService — SMTP reliability', () => {
     expect(htmlOf(revision)).toContain('CIEL PK has sent the opportunity');
   });
 
+  it('report completion reminder: deadline wording, progress and escaped title', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    const htmlOf = (m: SendMailOptions) =>
+      typeof m.html === 'string' ? m.html : '';
+    await service.sendReportCompletionReminder({
+      to: 'a@uni.edu',
+      studentName: 'Ayesha Khan',
+      projectTitle: 'Clean <Campus>',
+      publicCode: 'CS-123456',
+      reportStarted: true,
+      progressPct: 40,
+      sectionsComplete: 4,
+      sectionsTotal: 10,
+      phase: 'reporting_window',
+      endDate: '2026-10-31',
+      reportingCloseDate: '2026-12-30',
+      daysLeft: 12,
+      reportPath: '/dashboard/student/report?projectId=x',
+    });
+    await service.sendReportCompletionReminder({
+      to: 'b@uni.edu',
+      studentName: 'Bilal',
+      projectTitle: 'Tree drive',
+      reportStarted: false,
+      progressPct: 0,
+      sectionsComplete: 0,
+      sectionsTotal: 10,
+      phase: 'in_progress',
+      endDate: '2026-12-15',
+      reportingCloseDate: '2027-02-13',
+      daysLeft: 100,
+      reportPath: '/dashboard/student/report?projectId=y',
+      manual: true,
+    });
+    const [auto, manual] = sendMailReliable.mock.calls.map((c) => c[0]);
+    expect(auto.subject).toBe('Complete your report ASAP — Clean <Campus>');
+    expect(htmlOf(auto)).toContain('Clean &lt;Campus&gt; (CS-123456)');
+    expect(htmlOf(auto)).toContain('<strong>40% filled</strong>');
+    expect(htmlOf(auto)).toContain('<strong>12 days</strong>');
+    expect(htmlOf(auto)).toContain(
+      'This is an automatic reminder from CIEL PK.',
+    );
+    expect(htmlOf(auto)).toContain('Continue my report');
+    expect(htmlOf(manual)).toContain('not been started');
+    expect(htmlOf(manual)).toContain(
+      'A reviewer on your project asked CIEL PK',
+    );
+    expect(htmlOf(manual)).toContain('Start my report');
+  });
+
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
     const { service, internals } = makeService();
     const send = jest

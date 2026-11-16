@@ -21,4 +21,15 @@ export class InternalJobsController {
   runNightlyPost() {
     return this.platformJobs.runNightlyJobsNow('manual-secret');
   }
+
+  /** "Complete your report ASAP" reminders only (also part of nightly). */
+  @Get('report-reminders')
+  runReportRemindersGet() {
+    return this.platformJobs.runReportRemindersNow('vercel-cron');
+  }
+
+  @Post('report-reminders')
+  runReportRemindersPost() {
+    return this.platformJobs.runReportRemindersNow('manual-secret');
+  }
 }

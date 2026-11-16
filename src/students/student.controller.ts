@@ -13,6 +13,7 @@ import {
   UploadedFiles,
   UploadedFile,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
@@ -25,6 +26,7 @@ import { Roles } from '../auth/roles.decorator';
 import { StudentsService } from './students.service';
 import { StudentParticipationService } from './student-participation.service';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { ReportRemindersService } from '../report-reminders/report-reminders.service';
 import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
@@ -66,7 +68,17 @@ export class StudentController {
     private readonly studentReportsService: StudentReportsService,
     private readonly studentParticipationService: StudentParticipationService,
     private readonly s3Service: S3Service,
+    @Optional() private readonly reportReminders?: ReportRemindersService,
   ) {}
+
+  /** The "Complete your report ASAP" bar: this student's open reports with their deadlines. */
+  @Get('report-reminders')
+  async getReportReminders(@Request() req: AuthenticatedRequest) {
+    const data = this.reportReminders
+      ? await this.reportReminders.pendingForStudent(req.user.id)
+      : [];
+    return { success: true, data };
+  }
 
   @Get('projects')
   getStudentProjects(@Request() req: AuthenticatedRequest) {

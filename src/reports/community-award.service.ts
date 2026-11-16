@@ -12,6 +12,7 @@ import {
   scoreCommunityAward,
   communityAwardInputsFromReport,
   resolveReportDisplayHours,
+  collectReportSdgGoals,
   resolveDisplayCii,
   resolveReportFlashOutcomes,
   isCommunityAwardMedalReport,
@@ -47,6 +48,8 @@ export type CommunityAwardCard = {
   faculty_name: string;
   hours: number;
   sdg: string;
+  /** Every SDG on the card (report + opportunity, primary first). `sdg` stays the primary only. */
+  sdg_goals: number[];
   evidenceCount: number;
   story: string;
   change: string;
@@ -124,6 +127,7 @@ export class CommunityAwardService {
         ).trim() || 'Faculty',
       hours,
       sdg: sdgNum ? `SDG ${sdgNum}` : '—',
+      sdg_goals: collectReportSdgGoals(report),
       evidenceCount,
       story: (
         s2?.summary_text ||

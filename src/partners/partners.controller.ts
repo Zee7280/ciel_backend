@@ -42,6 +42,9 @@ import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-a
 import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
+import { ReportRemindersService } from '../report-reminders/report-reminders.service';
+import { StudentReport } from '../reports/entities/student-report.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NpeStudioService } from '../ranking/npe-studio.service';
 import { NpeGovernanceService } from '../ranking/npe-governance.service';
@@ -118,6 +121,7 @@ export class PartnersController {
     private readonly npeGovernance: NpeGovernanceService,
     private readonly facultyUniversityScope: FacultyUniversityScopeService,
     private readonly facultyReportsService: FacultyReportsService,
+    private readonly reportReminders: ReportRemindersService,
   ) {}
 
   @Get('me')
@@ -265,6 +269,79 @@ export class PartnersController {
       success: true,
       data: decorated,
       scope: isUni ? 'university' : 'partner',
+    };
+  }
+
+  /**
+   * Live project tracking for this organisation: a university sees its scope (own listings, its
+   * authorised faculty's listings, its students' seats); a partner / NGO sees the listings linked
+   * to it. Same rows as the faculty hub (live hours, report progress, reminder state).
+   */
+  @Get('community-service/tracking')
+  async communityTracking(@Request() req: PartnerRequest) {
+    const scope = await this.partnerTrackingScope(req);
+    return this.facultyReportsService.listProjectTrackingForOpportunities(
+      scope.ids,
+      {
+        restrictReports: scope.restrictReports,
+        keepSeat: scope.keepSeat,
+      },
+    );
+  }
+
+  /** "Remind now" on a tracked project: standard "Complete your report ASAP" to its students. */
+  @Post('community-service/tracking/:opportunityId/remind')
+  async communityTrackingRemind(
+    @Request() req: PartnerRequest,
+    @Param('opportunityId') opportunityId: string,
+    @Body() body?: { student_email?: string },
+  ) {
+    const scope = await this.partnerTrackingScope(req);
+    if (!scope.ids.includes(opportunityId)) {
+      throw new NotFoundException(
+        'Project not found in your organisation scope',
+      );
+    }
+    const data = await this.reportReminders.remindNow(
+      opportunityId,
+      {
+        role: scope.isUniversity ? 'university' : 'partner',
+        email: req.user.email,
+        name: req.user.name,
+      },
+      body?.student_email,
+    );
+    return { success: true, data };
+  }
+
+  private async partnerTrackingScope(req: PartnerRequest): Promise<{
+    isUniversity: boolean;
+    ids: string[];
+    restrictReports?: (rows: StudentReport[]) => Promise<StudentReport[]>;
+    keepSeat?: (seat: Participation) => boolean;
+  }> {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
+      const access = await this.facultyUniversityScope.universityReportAccess(
+        org.id,
+      );
+      return {
+        isUniversity: true,
+        ids: access.opportunityIds,
+        restrictReports: (rows) => access.restrictTo(rows),
+        keepSeat: (seat) =>
+          access.institutionalOpportunityIds.has(seat.projectId) ||
+          (!!seat.studentId && access.studentIds.has(seat.studentId)),
+      };
+    }
+    return {
+      isUniversity: false,
+      ids: await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+        req.user.id,
+      ),
     };
   }
 

@@ -8,6 +8,10 @@ import {
   FollowUpsService,
   type FollowUpDispatchRunResult,
 } from '../followups/followups.service';
+import {
+  ReportRemindersService,
+  type ReportReminderRunResult,
+} from '../report-reminders/report-reminders.service';
 
 export const NIGHTLY_JOBS_AUDIT_ACTION = 'PLATFORM_NIGHTLY_JOBS_RUN';
 
@@ -40,6 +44,9 @@ export type NightlyJobsRunResult = {
   /** Section 9.5 follow-up emails due today (null when the module is absent). Never affects `success`. */
   follow_ups: FollowUpDispatchRunResult | null;
   follow_ups_error: string | null;
+  /** "Complete your report ASAP" reminders due today (null when the module is absent). Never affects `success`. */
+  report_reminders: ReportReminderRunResult | null;
+  report_reminders_error: string | null;
   error: string | null;
 };
 
@@ -64,6 +71,7 @@ export class PlatformJobsService {
     @Optional() private readonly auditLogs?: AuditLogsService,
     @Optional() private readonly recordIds?: RecordIdsService,
     @Optional() private readonly followUps?: FollowUpsService,
+    @Optional() private readonly reportReminders?: ReportRemindersService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
@@ -94,6 +102,8 @@ export class PlatformJobsService {
       record_ids_error: null,
       follow_ups: null,
       follow_ups_error: null,
+      report_reminders: null,
+      report_reminders_error: null,
       error: null,
     };
     try {
@@ -138,6 +148,19 @@ export class PlatformJobsService {
         );
       }
     }
+    // Students with an unsubmitted report get today's "Complete your report ASAP" reminder.
+    // Isolated like the follow-ups: exactly-once per cadence step, failures retried next night.
+    if (this.reportReminders) {
+      try {
+        result.report_reminders = await this.reportReminders.runDue(new Date());
+      } catch (err) {
+        result.report_reminders_error =
+          err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `Nightly report reminders failed: ${result.report_reminders_error}`,
+        );
+      }
+    }
     const finishedAt = new Date();
     result.finished_at = finishedAt.toISOString();
     result.duration_ms = finishedAt.getTime() - startedAt.getTime();
@@ -160,5 +183,25 @@ export class PlatformJobsService {
 
   async runEnrollmentReconcileNow() {
     return this.participationReconcileService.reconcileEnrollmentMetadata();
+  }
+
+  /** Manual / cron entry for the report reminders alone (same exactly-once rules as nightly). */
+  async runReportRemindersNow(trigger: string) {
+    if (!this.reportReminders) {
+      return {
+        success: false,
+        trigger,
+        error: 'report reminders module not loaded',
+      };
+    }
+    const result = await this.reportReminders.runDue(new Date());
+    await this.auditLogs?.recordMutation({
+      action: 'REPORT_REMINDERS_RUN',
+      user: `system:${trigger}`,
+      target: 'report-reminders',
+      target_type: 'scheduled_job',
+      details: { ...result },
+    });
+    return { success: true, trigger, ...result };
   }
 }

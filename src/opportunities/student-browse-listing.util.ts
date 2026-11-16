@@ -226,7 +226,8 @@ function collectSdgIds(opportunity: {
   if (Array.isArray(opportunity.secondary_sdgs)) {
     opportunity.secondary_sdgs.forEach(push);
   }
-  return ids.slice(0, 4);
+  // Every SDG the creator chose (primary + all supporting) — cards and SDG filters need them all.
+  return ids;
 }
 
 function isRemoteMode(mode: unknown): boolean {

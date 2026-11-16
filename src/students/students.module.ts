@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ReportRemindersModule } from '../report-reminders/report-reminders.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StudentsController } from './students.controller';
 import { StudentController } from './student.controller';
@@ -43,6 +44,7 @@ import { FollowUpsModule } from '../followups/followups.module';
       Payment,
       NpeRankingSnapshot,
     ]),
+    ReportRemindersModule,
     UsersModule,
     EngagementModule,
     OpportunitiesModule,

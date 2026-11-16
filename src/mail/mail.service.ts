@@ -1799,6 +1799,106 @@ export class MailService {
     }
   }
 
+  /**
+   * "Complete your report ASAP": the automatic (nightly) or reviewer-triggered reminder to a
+   * student whose Community Service report is not submitted yet.
+   */
+  async sendReportCompletionReminder(input: {
+    to: string;
+    studentName: string;
+    projectTitle: string;
+    publicCode?: string | null;
+    reportStarted: boolean;
+    progressPct: number;
+    sectionsComplete: number;
+    sectionsTotal: number;
+    phase:
+      | 'no_dates'
+      | 'before_start'
+      | 'in_progress'
+      | 'reporting_window'
+      | 'closed';
+    endDate?: string | null;
+    reportingCloseDate?: string | null;
+    daysLeft?: number | null;
+    reportPath: string;
+    /** True when a reviewer pressed "Remind now" (wording says so). */
+    manual?: boolean;
+  }) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const first =
+      (input.studentName || '').trim().split(/\s+/).filter(Boolean)[0] ||
+      'there';
+    const nameEsc = this.escHtmlPlain(first);
+    const title = (
+      input.projectTitle || 'your community service project'
+    ).trim();
+    const titleEsc = this.escHtmlPlain(title);
+    const codeEsc = input.publicCode?.trim()
+      ? ` (${this.escHtmlPlain(input.publicCode.trim())})`
+      : '';
+    const link = this.buildFrontendLink(input.reportPath, {});
+    const afterEnd = input.phase === 'reporting_window';
+    const daysLeft = input.daysLeft;
+    const closeEsc = input.reportingCloseDate
+      ? this.escHtmlPlain(input.reportingCloseDate)
+      : '';
+    const deadlineLine = afterEnd
+      ? daysLeft != null
+        ? `The project has ended and <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> remain in the reporting window${closeEsc ? ` (closes <strong>${closeEsc}</strong>)` : ''}. After that the report can no longer be submitted.`
+        : 'The project has ended. Please submit your report as soon as possible.'
+      : `Your project is under way${input.endDate ? ` (ends <strong>${this.escHtmlPlain(input.endDate)}</strong>)` : ''}. Keep logging hours and evidence as you go so the report is ready to submit when the project ends${closeEsc ? `; the reporting window closes on <strong>${closeEsc}</strong>` : ''}.`;
+    const stateLine = input.reportStarted
+      ? `Your report is <strong>${Math.round(input.progressPct)}% filled</strong> (${input.sectionsComplete} of ${input.sectionsTotal} sections complete).`
+      : 'Your report has <strong>not been started</strong> yet.';
+    const senderLine = input.manual
+      ? 'A reviewer on your project asked CIEL PK to send you this reminder.'
+      : 'This is an automatic reminder from CIEL PK.';
+    const cta = input.reportStarted
+      ? 'Continue my report →'
+      : 'Start my report →';
+    const accent = afterEnd ? '#b45309' : '#0f6e68';
+    const html = `
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; color: #16313d; line-height: 1.55;">
+        <div style="background: linear-gradient(125deg, #0d3b45 0%, ${accent} 70%); color: #fff; border-radius: 14px 14px 0 0; padding: 26px 28px 20px;">
+          <p style="margin: 0 0 8px 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #e8d48a; font-weight: 700;">CIEL PK · Community Service</p>
+          <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 800;">Complete your report ASAP</h1>
+          <p style="margin: 10px 0 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">${titleEsc}${codeEsc}</p>
+        </div>
+        <div style="border: 1px solid #d7e3e6; border-top: 0; border-radius: 0 0 14px 14px; padding: 24px 28px 26px; background: #ffffff;">
+          <p style="margin: 0 0 14px 0;">Hi <strong>${nameEsc}</strong>,</p>
+          <p style="margin: 0 0 12px 0; font-size: 15px;">${stateLine}</p>
+          <p style="margin: 0 0 18px 0; font-size: 15px;">${deadlineLine}</p>
+          <div style="background: #fffaf0; border: 1px solid #f0dfae; border-left: 4px solid #c9a227; border-radius: 12px; padding: 12px 16px; margin: 0 0 20px 0; font-size: 14px;">
+            <strong>What to do now:</strong> open your report, add team members and sessions in Section 1, log every service hour, upload evidence, and press <strong>Submit Report</strong> before the reporting window closes.
+          </div>
+          <div style="text-align: center; margin: 8px 0 18px;">
+            <a href="${link}" style="background-color: #174b43; color: #ffffff; padding: 13px 28px; text-decoration: none; border-radius: 8px; font-weight: 800; display: inline-block; font-size: 14px;">${cta}</a>
+          </div>
+          <p style="margin: 0 0 6px 0; font-size: 12.5px; color: #5d727a;">${senderLine} Your faculty, partner and CIEL PK can see live progress on your project.</p>
+          <p style="margin: 14px 0 0 0; font-size: 13px; color: #6a7d84;">— <strong style="color: #16313d;">Team CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+        </div>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Complete your report ASAP — ${title}`,
+        html,
+      });
+      this.logger.log(`Report completion reminder sent to ${input.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed report completion reminder to ${input.to}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+  }
+
   async sendStudentOpportunityStatusUpdate(
     to: string,
     projectTitle: string,

@@ -339,6 +339,13 @@ export class StudentReport {
       source: string;
       purpose: string;
       verification: string;
+      /** Accountability (Team Lead brief): value, who gave it, and the evidence trail. */
+      pkr_value?: string;
+      contributor_name?: string;
+      contributor_email?: string;
+      contributor_phone_code?: string;
+      contributor_phone?: string;
+      evidence_trail?: string;
     }>;
     media_urls?: string[];
   };

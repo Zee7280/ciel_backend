@@ -122,6 +122,93 @@ describe('validateReportSectionsForSubmit', () => {
     );
   });
 
+  it('a donated or sponsored resource needs its contributor, PKR value and evidence trail', () => {
+    const base = {
+      section6: {
+        use_resources: 'yes',
+        resources: [
+          {
+            type: 'Educational / Learning Materials',
+            amount: '50',
+            unit: 'Books / Materials',
+            sources: ['Individual Donor'],
+            purpose: 'Notebooks for Class 4',
+            verification: ['Receipt / Invoice'],
+          },
+        ],
+      },
+    };
+    const fields = validateReportSectionsForSubmit(base as never)
+      .filter((i) => i.section === 6)
+      .map((i) => i.field);
+    expect(fields).toEqual(
+      expect.arrayContaining([
+        'resources.0.pkr_value',
+        'resources.0.contributor_name',
+        'resources.0.contributor_email',
+        'resources.0.contributor_phone',
+        'resources.0.evidence_trail',
+      ]),
+    );
+
+    const complete = {
+      section6: {
+        use_resources: 'yes',
+        resources: [
+          {
+            ...base.section6.resources[0],
+            pkr_value: '5,000',
+            contributor_name: 'Ahmed Books',
+            contributor_email: 'ahmed@books.pk',
+            contributor_phone_code: '+92',
+            contributor_phone: '0300 1234567',
+            evidence_trail: 'Purchase receipt, handover photos to Class 4',
+          },
+        ],
+      },
+    };
+    expect(
+      validateReportSectionsForSubmit(complete as never).filter(
+        (i) => i.section === 6,
+      ),
+    ).toEqual([]);
+  });
+
+  it('team time / self-funded in-kind resources only need the PKR value when they are cash; a phone without a country code is refused', () => {
+    const inKind = {
+      section6: {
+        use_resources: 'yes',
+        resources: [
+          {
+            type: 'Volunteer Time',
+            amount: '20',
+            unit: 'Hours',
+            sources: ['Student Team'],
+            purpose: 'Facilitation',
+            verification: ['Timesheet / Volunteer Log'],
+          },
+          {
+            type: 'Cash / Funding',
+            amount: '3000',
+            unit: 'PKR',
+            sources: ['Self-funded'],
+            purpose: 'Paint',
+            verification: ['Receipt / Invoice'],
+            contributor_phone_code: '',
+            contributor_phone: '3001234567',
+          },
+        ],
+      },
+    };
+    const fields = validateReportSectionsForSubmit(inKind as never)
+      .filter((i) => i.section === 6)
+      .map((i) => i.field);
+    expect(fields).toEqual([
+      'resources.1.pkr_value',
+      'resources.1.contributor_phone',
+    ]);
+  });
+
   it('requires a use_resources yes or no choice', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,

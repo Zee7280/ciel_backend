@@ -20,6 +20,37 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** Section 5 (Resources) accountability — same rule as the student form (resourceContributors.ts). */
+const INTERNAL_RESOURCE_SOURCES = new Set(['Student Team', 'Self-funded']);
+
+export function isExternalResourceSource(sources: unknown): boolean {
+  return (Array.isArray(sources) ? sources : []).some(
+    (s) =>
+      typeof s === 'string' &&
+      s.trim() &&
+      !INTERNAL_RESOURCE_SOURCES.has(s.trim()),
+  );
+}
+
+function contributorPhoneLooksValid(code: unknown, number: unknown): boolean {
+  const digits = stringField(number).replace(/\D/g, '').replace(/^0+/, '');
+  if (!digits) return false;
+  // The country code is mandatory ("mobile number with country code").
+  const cc = stringField(code).replace(/\D/g, '');
+  if (!cc) return false;
+  return /^\+\d{8,15}$/.test(`+${cc}${digits}`);
+}
+
+function contributorEmailLooksValid(email: unknown): boolean {
+  const e = stringField(email).trim();
+  return !e || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+function parsePkrValue(value: unknown): number {
+  const cleaned = stringifyLoose(value ?? '').replace(/[^\d.]/g, '');
+  return cleaned ? Number(cleaned) : NaN;
+}
+
 /** `String()` over a loosely-typed form value (same coercion; typed so the linter knows it is not a bare object). */
 function stringifyLoose(value: unknown): string {
   return String(value as { toString(): string });
@@ -991,6 +1022,85 @@ export function validateReportSectionsForSubmit(report: {
             field: `resources.${index}.source_other`,
             message: 'Please specify the source',
           });
+        }
+
+        // Accountability: a contribution from outside the team names its contributor, carries a
+        // PKR value and an evidence trail (mirrors the student form).
+        const external = isExternalResourceSource(sources);
+        const unit = stringField(res.unit);
+        const isCash =
+          /cash|funding|financial/i.test(stringField(res.type)) ||
+          ['PKR', 'USD', 'EUR', 'GBP'].includes(unit);
+        const pkrGiven = stringifyLoose(res.pkr_value ?? '').trim() !== '';
+        const pkr = parsePkrValue(res.pkr_value);
+        if (
+          (external || isCash) &&
+          (!pkrGiven || !Number.isFinite(pkr) || pkr <= 0)
+        ) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.pkr_value`,
+            message:
+              'Give the PKR value of this contribution (e.g. 50 × PKR 100 = 5,000)',
+          });
+        } else if (pkrGiven && (!Number.isFinite(pkr) || pkr < 0)) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.pkr_value`,
+            message: 'PKR value must be a number',
+          });
+        }
+        if (!contributorEmailLooksValid(res.contributor_email)) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.contributor_email`,
+            message: 'Enter a valid email address',
+          });
+        }
+        const phoneGiven = stringField(res.contributor_phone).trim() !== '';
+        if (
+          phoneGiven &&
+          !contributorPhoneLooksValid(
+            res.contributor_phone_code,
+            res.contributor_phone,
+          )
+        ) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.contributor_phone`,
+            message: 'Mobile number needs a country code, e.g. +92 300 1234567',
+          });
+        }
+        if (external) {
+          if (!stringField(res.contributor_name).trim()) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.contributor_name`,
+              message: 'Name the contributor of this resource',
+            });
+          }
+          if (!stringField(res.contributor_email).trim()) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.contributor_email`,
+              message: "Add the contributor's email",
+            });
+          }
+          if (!phoneGiven) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.contributor_phone`,
+              message: "Add the contributor's mobile number with country code",
+            });
+          }
+          if (!stringField(res.evidence_trail).trim()) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.evidence_trail`,
+              message:
+                'Describe the evidence trail: where it came from, how it was used, who received it',
+            });
+          }
         }
       });
     }

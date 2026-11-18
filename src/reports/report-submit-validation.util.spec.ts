@@ -122,7 +122,7 @@ describe('validateReportSectionsForSubmit', () => {
     );
   });
 
-  it('a donated or sponsored resource needs its contributor, PKR value and evidence trail', () => {
+  it('a donated or sponsored resource needs its contributor and evidence trail', () => {
     const base = {
       section6: {
         use_resources: 'yes',
@@ -143,7 +143,6 @@ describe('validateReportSectionsForSubmit', () => {
       .map((i) => i.field);
     expect(fields).toEqual(
       expect.arrayContaining([
-        'resources.0.pkr_value',
         'resources.0.contributor_name',
         'resources.0.contributor_email',
         'resources.0.contributor_phone',
@@ -157,7 +156,6 @@ describe('validateReportSectionsForSubmit', () => {
         resources: [
           {
             ...base.section6.resources[0],
-            pkr_value: '5,000',
             contributor_name: 'Ahmed Books',
             contributor_email: 'ahmed@books.pk',
             contributor_phone_code: '+92',
@@ -174,7 +172,7 @@ describe('validateReportSectionsForSubmit', () => {
     ).toEqual([]);
   });
 
-  it('team time / self-funded in-kind resources only need the PKR value when they are cash; a phone without a country code is refused', () => {
+  it('team time / self-funded resources need no contributor details; a phone without a country code is refused', () => {
     const inKind = {
       section6: {
         use_resources: 'yes',
@@ -203,10 +201,7 @@ describe('validateReportSectionsForSubmit', () => {
     const fields = validateReportSectionsForSubmit(inKind as never)
       .filter((i) => i.section === 6)
       .map((i) => i.field);
-    expect(fields).toEqual([
-      'resources.1.pkr_value',
-      'resources.1.contributor_phone',
-    ]);
+    expect(fields).toEqual(['resources.1.contributor_phone']);
   });
 
   it('requires a use_resources yes or no choice', () => {

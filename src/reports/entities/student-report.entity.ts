@@ -339,7 +339,8 @@ export class StudentReport {
       source: string;
       purpose: string;
       verification: string;
-      /** Accountability (Team Lead brief): value, who gave it, and the evidence trail. */
+      /** Accountability (Team Lead brief): who gave it and the evidence trail. */
+      /** Legacy — removed from the form (duplicate of amount / quantity); older drafts may still carry it. */
       pkr_value?: string;
       contributor_name?: string;
       contributor_email?: string;

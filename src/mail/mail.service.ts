@@ -2079,7 +2079,7 @@ export class MailService {
           <h2 style="${h2}">3. Resources – Section 5</h2>
           <p style="${p}">Record every resource used, whether self-funded, donated or sponsored, including cash, educational materials, medical supplies, equipment and other contributions.</p>
           <p style="${p}"><em>Example:</em> 50 notebooks × PKR 100 = PKR 5,000.</p>
-          <p style="${p}">For every contribution, provide the contributor's name, email, mobile number with country code, quantity, unit, PKR value and supporting evidence.</p>
+          <p style="${p}">For every contribution, provide the contributor's name, email, mobile number with country code, quantity, unit and supporting evidence.</p>
           <p style="${p}"><strong>Evidence and Accountability:</strong> Every contribution must have a clear, verifiable trail showing where the resource came from, how it was utilized and who ultimately received it.</p>
           <p style="${p}">For example:</p>
           <ul style="margin: 0 0 12px 0; padding-left: 20px;">

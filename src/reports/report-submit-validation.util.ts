@@ -46,11 +46,6 @@ function contributorEmailLooksValid(email: unknown): boolean {
   return !e || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
-function parsePkrValue(value: unknown): number {
-  const cleaned = stringifyLoose(value ?? '').replace(/[^\d.]/g, '');
-  return cleaned ? Number(cleaned) : NaN;
-}
-
 /** `String()` over a loosely-typed form value (same coercion; typed so the linter knows it is not a bare object). */
 function stringifyLoose(value: unknown): string {
   return String(value as { toString(): string });
@@ -1024,32 +1019,9 @@ export function validateReportSectionsForSubmit(report: {
           });
         }
 
-        // Accountability: a contribution from outside the team names its contributor, carries a
-        // PKR value and an evidence trail (mirrors the student form).
+        // Accountability: a contribution from outside the team names its contributor and
+        // carries an evidence trail (mirrors the student form).
         const external = isExternalResourceSource(sources);
-        const unit = stringField(res.unit);
-        const isCash =
-          /cash|funding|financial/i.test(stringField(res.type)) ||
-          ['PKR', 'USD', 'EUR', 'GBP'].includes(unit);
-        const pkrGiven = stringifyLoose(res.pkr_value ?? '').trim() !== '';
-        const pkr = parsePkrValue(res.pkr_value);
-        if (
-          (external || isCash) &&
-          (!pkrGiven || !Number.isFinite(pkr) || pkr <= 0)
-        ) {
-          issues.push({
-            section: 6,
-            field: `resources.${index}.pkr_value`,
-            message:
-              'Give the PKR value of this contribution (e.g. 50 × PKR 100 = 5,000)',
-          });
-        } else if (pkrGiven && (!Number.isFinite(pkr) || pkr < 0)) {
-          issues.push({
-            section: 6,
-            field: `resources.${index}.pkr_value`,
-            message: 'PKR value must be a number',
-          });
-        }
         if (!contributorEmailLooksValid(res.contributor_email)) {
           issues.push({
             section: 6,

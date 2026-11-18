@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FollowUpsService } from '../followups/followups.service';
+import { ResourceContributorsService } from '../resource-contributors/resource-contributors.service';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, QueryFailedError, Repository } from 'typeorm';
@@ -258,6 +259,8 @@ export class StudentReportsService {
     private readonly opportunityApplicationsService?: OpportunityApplicationsService,
     @Optional() private readonly recordIds?: RecordIdsService,
     @Optional() private readonly followUpsService?: FollowUpsService,
+    @Optional()
+    private readonly resourceContributorsService?: ResourceContributorsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: unknown): boolean {
@@ -3587,6 +3590,25 @@ export class StudentReportsService {
       });
       for (const admin of admins || []) {
         await send(admin.email, 'admin');
+      }
+    }
+
+    // Team Lead brief: external resource contributors get their appreciation email + certificate
+    // once the report is published (exactly once per contribution; never blocks the package mail).
+    if (this.resourceContributorsService) {
+      try {
+        const ack = await this.resourceContributorsService.acknowledgeReport(
+          full.id,
+        );
+        if (ack.sent || ack.failed) {
+          this.logger.log(
+            `Contributor acknowledgements for report ${full.id}: sent ${ack.sent}, failed ${ack.failed}, already ${ack.already}`,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Contributor acknowledgements failed for report ${full.id}: ${(error as Error)?.message}`,
+        );
       }
     }
   }

@@ -3936,6 +3936,74 @@ ${instructionsHtml}
   }
 
   /**
+   * Section 5 resource contributor (donor / sponsor / partner / community member named in a verified
+   * report): thank-you with the public contribution certificate; existing accounts are pointed at
+   * their impact wall, everyone else is invited to register with the same email. Throws on failure
+   * so the caller can record the row as not sent and retry on the next publish.
+   */
+  async sendResourceContributorAppreciation(input: {
+    to: string;
+    contributorName: string;
+    projectTitle: string;
+    leadName: string;
+    resourceLine: string;
+    purpose?: string | null;
+    certificateHref: string;
+    reportVerifyHref?: string | null;
+    existingAccount?: boolean;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const supportEmail =
+      this.configService.get<string>('SUPPORT_EMAIL') || 'support@cielpk.com';
+    const website = (
+      this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com'
+    ).replace(/\/+$/, '');
+    const e = (v: string) => this.escHtmlPlain(v);
+    const name = (input.contributorName || '').trim() || 'Contributor';
+    const purpose = (input.purpose || '').trim().slice(0, 400);
+    const accountHref = input.existingAccount
+      ? this.buildFrontendLink('/login', { next: '/dashboard' })
+      : this.buildFrontendLink('/signup', { email: to });
+    const p =
+      'margin:0 0 14px 0;font-size:15px;line-height:1.65;color:#1f2937;';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color:#0e7d74;margin:0 0 6px 0;">Thank you for your contribution</h2>
+        <p style="margin:0 0 18px 0;font-size:13px;color:#64748b;">CIEL PK · Verified community impact</p>
+        <p style="${p}">Dear ${e(name)},</p>
+        <p style="${p}">The student team led by <strong>${e(input.leadName)}</strong> has completed <strong>&ldquo;${e(input.projectTitle)}&rdquo;</strong>, and CIEL PK has verified the project report. The team named you as a contributor:</p>
+        <div style="margin:0 0 16px 0;padding:14px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
+          <p style="margin:0;font-size:15px;color:#065f46;"><strong>${e(input.resourceLine)}</strong></p>
+          ${purpose ? `<p style="margin:8px 0 0 0;font-size:14px;color:#1f2937;">What it made possible: ${e(purpose)}</p>` : ''}
+        </div>
+        <p style="${p}">Your contribution is now part of Pakistan&rsquo;s verified community impact record, with a certificate in your name.</p>
+        <div style="text-align:center;margin:24px 0;">
+          <a href="${input.certificateHref}" style="background-color:#0e7d74;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">View your contribution certificate</a>
+        </div>
+        ${input.reportVerifyHref ? `<p style="${p}text-align:center;font-size:14px;"><a href="${input.reportVerifyHref}" style="color:#0e7d74;">See the verified impact report</a></p>` : ''}
+        ${
+          input.existingAccount
+            ? `<p style="${p}">This contribution now appears on the impact wall of your CIEL PK account (${e(to)}).</p>
+        <div style="text-align:center;margin:18px 0;"><a href="${accountHref}" style="color:#0e7d74;font-weight:bold;">Sign in to see it</a></div>`
+            : `<p style="${p}">To keep all your contributions in one place, register on CIEL PK with this email address (${e(to)}); every verified contribution will appear on your impact wall automatically.</p>
+        <div style="text-align:center;margin:18px 0;"><a href="${accountHref}" style="color:#0e7d74;font-weight:bold;">Register on CIEL PK</a></div>`
+        }
+        <p style="margin-top:24px;">With appreciation,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span><br><span style="font-size:13px;color:#64748b;"><a href="mailto:${supportEmail}">${e(supportEmail)}</a> | <a href="${website}">${e(website.replace(/^https?:\/\//, ''))}</a></span></p>
+      </div>
+    `;
+    await this.sendMailReliable({
+      from,
+      to,
+      subject: `Thank you for your contribution to "${input.projectTitle}" — CIEL PK`,
+      html,
+    });
+  }
+
+  /**
    * Quick Community Impact: once CIEL PK gives final approval, the host / partner organisation gets the
    * activity's one-page flashcard (PDF) and a link to register as a Partner and see it on My Impact Wall.
    * Returns whether it was sent; never throws.

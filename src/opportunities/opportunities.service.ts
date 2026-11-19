@@ -4495,6 +4495,44 @@ export class OpportunitiesService {
     return { items, opportunities: items, rows: items };
   }
 
+  /**
+   * WhatsApp-able phone per account email (lower-cased), from the signup `countryCode` + `phone`
+   * columns. One query for the whole list; any failure just means no fallback number.
+   */
+  private async loadAccountPhonesByEmail(
+    emails: string[],
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const wanted = [
+      ...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean)),
+    ];
+    if (!wanted.length) return out;
+    try {
+      const users = await this.usersRepository
+        .createQueryBuilder('u')
+        .where('LOWER(u.email) IN (:...emails)', { emails: wanted })
+        .getMany();
+      for (const u of users || []) {
+        const email = String(u?.email || '')
+          .trim()
+          .toLowerCase();
+        const phone = String(u?.phone || '').trim();
+        if (!email || !phone) continue;
+        const cc = String(u?.countryCode || '').trim();
+        const full =
+          phone.startsWith('+') || phone.startsWith('00') || !cc
+            ? phone
+            : `${cc}${phone}`;
+        out.set(email, full);
+      }
+    } catch (error) {
+      console.warn(
+        `Could not load reviewer account phones: ${(error as Error)?.message}`,
+      );
+    }
+    return out;
+  }
+
   /** Student dashboard: opportunities this student created — powers "My Drafts" and the
    * Community Service Workspace approval-stage tracker. Optional `status` narrows to one status
    * (e.g. `draft`); omitted returns everything the student has created, newest first. */
@@ -4511,6 +4549,21 @@ export class OpportunitiesService {
       order: { updatedAt: 'DESC' },
     });
 
+    // The student form never asks for the faculty's phone (and partner forms may skip it), so the
+    // WhatsApp reminder falls back to the number on the reviewer's own CIEL PK account.
+    const reviewerEmails = new Set<string>();
+    for (const opp of rows) {
+      const f = this.getFacultyEmailFromOpportunity(opp);
+      const p = this.resolvePartnerEmailFromOpportunity(opp);
+      if (f) reviewerEmails.add(f.toLowerCase());
+      if (p) reviewerEmails.add(p.toLowerCase());
+    }
+    const accountPhoneByEmail = await this.loadAccountPhonesByEmail([
+      ...reviewerEmails,
+    ]);
+    const accountPhone = (email: string | null): string | null =>
+      (email && accountPhoneByEmail.get(email.toLowerCase())) || null;
+
     const items = rows.map((opp) => {
       const sup =
         (opp.supervision as Record<string, unknown> | null | undefined) ??
@@ -4520,6 +4573,8 @@ export class OpportunitiesService {
           | Record<string, unknown>
           | null
           | undefined) ?? undefined;
+      const facultyEmail = this.getFacultyEmailFromOpportunity(opp);
+      const partnerEmail = this.resolvePartnerEmailFromOpportunity(opp);
       const facultyName =
         (sup &&
           typeof sup.supervisor_name === 'string' &&
@@ -4549,16 +4604,16 @@ export class OpportunitiesService {
         // Lets the student's reminder buttons address the actual pending approver by name/email
         // instead of an empty mailto: — same contact resolution used everywhere else on this entity.
         faculty_contact_name: facultyName,
-        faculty_contact_email: this.getFacultyEmailFromOpportunity(opp),
+        faculty_contact_email: facultyEmail,
         faculty_contact_phone: (() => {
           const w = sup?.whatsapp_e164;
           const f = sup?.faculty_whatsapp;
           if (typeof w === 'string' && w.trim()) return w.trim();
           if (typeof f === 'string' && f.trim()) return f.trim();
-          return null;
+          return accountPhone(facultyEmail);
         })(),
         partner_contact_name: partnerName,
-        partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
+        partner_contact_email: partnerEmail,
         partner_contact_phone: (() => {
           const a = sup?.partner_whatsapp_e164;
           const b = sup?.partner_phone;
@@ -4569,7 +4624,7 @@ export class OpportunitiesService {
           for (const v of [a, b, e, c, d, f]) {
             if (typeof v === 'string' && v.trim()) return v.trim();
           }
-          return null;
+          return accountPhone(partnerEmail);
         })(),
       };
     });

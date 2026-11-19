@@ -239,8 +239,8 @@ export class StudentParticipationService {
           ),
           attendance_approver_label: approverLabel,
           messages: {
-            en: 'You are on a team project. Do not apply separately � update your attendance only; your team lead files the report.',
-            ur: 'You are on a team project. Do not apply separately � update your attendance only; your team lead files the report.',
+            en: 'You are on a team project. Do not apply separately — update your attendance only; your team lead files the report.',
+            ur: 'You are on a team project. Do not apply separately — update your attendance only; your team lead files the report.',
           },
         },
         { participation: mine, opportunity, reportStatus },
@@ -352,8 +352,8 @@ export class StudentParticipationService {
         attendance_approver_type: approverType,
         attendance_approver_label: approverLabel,
         messages: {
-          en: 'Joining a teammate who already started? Do not apply � ask them to add you in Section 1. Your own work? Apply as Individual.',
-          ur: 'Joining a teammate who already started? Do not apply � ask them to add you in Section 1. Your own work? Apply as Individual.',
+          en: 'Joining a teammate who already started? Do not apply — ask them to add you in Section 1. Your own work? Apply as Individual.',
+          ur: 'Joining a teammate who already started? Do not apply — ask them to add you in Section 1. Your own work? Apply as Individual.',
         },
       },
       { participation: null, opportunity },

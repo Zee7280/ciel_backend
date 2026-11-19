@@ -8,6 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { NotificationsService } from '../notifications/notifications.service';
+import { communityServicePublicCode } from '../opportunities/opportunity-approval-tracker.util';
 import { FollowUpsService } from '../followups/followups.service';
 import { ResourceContributorsService } from '../resource-contributors/resource-contributors.service';
 import { ConfigService } from '@nestjs/config';
@@ -3499,6 +3500,66 @@ export class StudentReportsService {
   }
 
   /** After Super Admin publishes, send the student Impact Package. Faculty / student / university get the analysis report; partner / NGO get the same package without it. */
+  /**
+   * Report submitted / resubmitted → the faculty supervisor (first reviewer) hears about it: an
+   * email with the link to their review page and an in-app notice. Resolved from the linked
+   * faculty account, else the supervisor email the team lead gave in Section 1. Never throws.
+   */
+  private async notifyFacultyReportSubmitted(
+    report: StudentReport,
+    input: {
+      projectTitle: string;
+      publicCode?: string | null;
+      studentName: string;
+      resubmitted?: boolean;
+    },
+  ): Promise<void> {
+    try {
+      const faculty = report.facultyId
+        ? await this.usersRepository.findOne({
+            where: { id: report.facultyId },
+          })
+        : null;
+      const s1 = (report.section1 || {}) as {
+        faculty_supervisor_email?: unknown;
+        faculty_supervisor_name?: unknown;
+      };
+      const to =
+        this.normalizeEmail(faculty?.email) ||
+        this.normalizeEmail(s1.faculty_supervisor_email);
+      const facultyName =
+        (typeof faculty?.name === 'string' && faculty.name.trim()) ||
+        (typeof s1.faculty_supervisor_name === 'string'
+          ? s1.faculty_supervisor_name.trim()
+          : '') ||
+        null;
+      if (to) {
+        await this.mailService.sendFacultyReportSubmittedForReview({
+          to,
+          facultyName,
+          studentName: input.studentName,
+          projectTitle: input.projectTitle,
+          publicCode: input.publicCode ?? null,
+          reportId: report.id,
+          resubmitted: input.resubmitted === true,
+        });
+      }
+      if (faculty?.id && this.notificationsService) {
+        await this.notificationsService.createNotification(faculty.id, {
+          type: 'approval',
+          title: input.resubmitted
+            ? 'Report resubmitted for your review'
+            : 'Report submitted for your review',
+          message: `${input.studentName} ${input.resubmitted ? 'resubmitted' : 'submitted'} the impact report for "${input.projectTitle}". Open Reports to approve it or return it for revision.`,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Faculty report-submitted notice failed for report ${report.id}: ${(error as Error)?.message}`,
+      );
+    }
+  }
+
   private async notifyReviewPackagePublished(
     report: StudentReport,
   ): Promise<void> {
@@ -4221,6 +4282,16 @@ export class StudentReportsService {
           },
         )
         .catch(() => undefined);
+      // The faculty supervisor reviews first: tell them the report is waiting (email + in-app),
+      // not only CIEL PK. Best effort — never blocks the submission.
+      void this.notifyFacultyReportSubmitted(report, {
+        projectTitle,
+        publicCode: oppForTitle
+          ? communityServicePublicCode(oppForTitle.id, oppForTitle.createdAt)
+          : null,
+        studentName: student?.name || 'Student',
+        resubmitted: priorReportStatus != null,
+      }).catch(() => undefined);
     }
 
     const submitOpportunity =

@@ -4649,17 +4649,34 @@ export class OpportunitiesService {
           typeof sup.supervisor_name === 'string' &&
           sup.supervisor_name.trim()) ||
         null;
+      // A phone number typed into the "contact person" field must never become the reviewer's
+      // name ("Waiting for 03021414141"): skip it as a name, keep it as the WhatsApp fallback.
+      const looksLikePhone = (v: unknown): boolean =>
+        typeof v === 'string' &&
+        /^[+\d][\d\s().-]{6,}$/.test(v.trim()) &&
+        v.replace(/\D/g, '').length >= 7;
+      const nameCandidates = [
+        po?.contact_person,
+        po?.contact_person_name,
+        sup?.partner_contact_person,
+      ];
       const partnerName =
-        (po &&
-          typeof po.contact_person === 'string' &&
-          po.contact_person.trim()) ||
-        (po &&
-          typeof po.contact_person_name === 'string' &&
-          po.contact_person_name.trim()) ||
-        (sup &&
-          typeof sup.partner_contact_person === 'string' &&
-          sup.partner_contact_person.trim()) ||
+        nameCandidates
+          .find(
+            (v): v is string =>
+              typeof v === 'string' && !!v.trim() && !looksLikePhone(v),
+          )
+          ?.trim() ||
+        (po && typeof po.organization_name === 'string'
+          ? po.organization_name.trim()
+          : '') ||
+        (sup && typeof sup.partner_org_name === 'string'
+          ? sup.partner_org_name.trim()
+          : '') ||
         null;
+      const phoneTypedAsName = nameCandidates.find(
+        (v): v is string => typeof v === 'string' && looksLikePhone(v),
+      );
       return {
         id: opp.id,
         title: opp.title,
@@ -4693,6 +4710,7 @@ export class OpportunitiesService {
           for (const v of [a, b, e, c, d, f]) {
             if (typeof v === 'string' && v.trim()) return v.trim();
           }
+          if (phoneTypedAsName) return phoneTypedAsName.trim();
           return accountPhone(partnerEmail);
         })(),
       };

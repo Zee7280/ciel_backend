@@ -1896,6 +1896,8 @@ export class MailService {
     decidedBy: 'faculty' | 'partner' | 'admin';
     action: 'rejected' | 'revision_requested';
     reason?: string | null;
+    /** Where this recipient sees the updated status on cielpk.com (their own dashboard view). */
+    openHref?: string | null;
   }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -1907,6 +1909,14 @@ export class MailService {
         : input.decidedBy === 'partner'
           ? 'The partner organization'
           : 'CIEL PK';
+    const openHref = (input.openHref || '').trim();
+    const openLabel =
+      input.recipientRole === 'creator' && !rejected
+        ? 'Open My Opportunities › Action Required'
+        : 'Open on CIEL PK';
+    const openBlock = openHref
+      ? `<p style="margin:24px 0 0 0;"><a href="${this.escHtmlPlain(openHref)}" style="display:inline-block;background-color:#0e7d74;color:#ffffff;padding:12px 24px;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;">${openLabel}</a></p>`
+      : '';
     const title = (input.projectTitle || 'Opportunity').trim();
     const titleEsc = this.escHtmlPlain(title);
     const code = (input.publicCode || '').trim();
@@ -1950,6 +1960,7 @@ export class MailService {
               <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">${status}</p>
               ${reasonBlock}
               <p style="margin:20px 0 0 0;font-size:14px;line-height:1.6;color:#374151;">${next}</p>
+              ${openBlock}
               <p style="margin:24px 0 0 0;font-size:13px;color:#6b7280;">— <strong style="color:#111827;">CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
             </td>
           </tr>

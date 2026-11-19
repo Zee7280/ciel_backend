@@ -5918,6 +5918,18 @@ export class OpportunitiesService {
         opportunity.id,
         opportunity.createdAt,
       );
+      // Each recipient's own dashboard view of this opportunity, so "status updated" is one click away.
+      const origin = this.frontendOrigin() || 'https://cielpk.com';
+      const route = buildOpportunityApprovalTracker(opportunity).route;
+      const oppParam = encodeURIComponent(opportunity.id);
+      const hrefFor = (role: 'creator' | 'faculty' | 'partner' | 'admin') => {
+        if (role === 'faculty') return `${origin}${route.faculty}`;
+        if (role === 'partner') return `${origin}${route.partner}`;
+        if (role === 'admin') return `${origin}${route.admin}`;
+        if (!opportunity.isStudentCreated) return `${origin}/dashboard`;
+        const filter = input.action === 'rejected' ? 'closed' : 'action';
+        return `${origin}/dashboard/student/paths/community-service?view=create&filter=${filter}&opportunity=${oppParam}`;
+      };
       // Sent side by side so a reviewer's click is not held up by one mail per stakeholder.
       await Promise.all(
         recipients.map((r) =>
@@ -5929,6 +5941,7 @@ export class OpportunitiesService {
             decidedBy: input.decidedBy,
             action: input.action,
             reason: input.reason,
+            openHref: hrefFor(r.role),
           }),
         ),
       );

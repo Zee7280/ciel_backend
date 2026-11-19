@@ -24,6 +24,17 @@ const sanitizeHtml = sanitizeHtmlModule as (
 ) => string;
 
 /** Optional structured summary for faculty/partner verification emails. */
+/** Why a reviewer receives a verification email again: a revised resubmission (fresh link) or a reminder. */
+export type ReviewerEmailContext = {
+  kind: 'resubmission' | 'reminder';
+  /** Opportunity version being reviewed (v2, v3 …) for a resubmission. */
+  version?: number | null;
+  /** The reviewer's own revision feedback that the creator acted on. */
+  previousFeedback?: string | null;
+  /** ISO time of that revision request. */
+  feedbackAt?: string | null;
+};
+
 export interface OpportunityVerificationEmailDetails {
   /** Shown as "Reference ID" in the review-email summary table. */
   opportunityId?: string;
@@ -1493,6 +1504,63 @@ export class MailService {
     }
   }
 
+  /**
+   * Why a reviewer is getting this verification email again. Every round issues a fresh link, so
+   * the email must say so in visible text and under a different subject — Gmail threads a
+   * repeat of the same subject + body with the first email and collapses it as "trimmed
+   * content", which reads as a blank email.
+   */
+  private reviewerEmailContextBlock(
+    context: ReviewerEmailContext | undefined,
+    reviewerWord: 'faculty' | 'partner',
+  ): string {
+    if (!context) return '';
+    const when = context.feedbackAt
+      ? new Date(context.feedbackAt).toLocaleString('en-GB', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })
+      : '';
+    const box =
+      'margin: 0 0 20px 0; padding: 12px 14px; border-radius: 8px; background: #fff7ed; border-left: 4px solid #d97706; font-size: 14px; color: #7c2d12;';
+    if (context.kind === 'resubmission') {
+      const version =
+        context.version && context.version > 1 ? context.version : 2;
+      const feedback = context.previousFeedback?.trim()
+        ? `<p style="margin: 8px 0 0 0;"><strong>Your feedback was:</strong> &ldquo;${this.escHtmlPlain(context.previousFeedback.trim())}&rdquo;</p>`
+        : '';
+      return `<div style="${box}"><p style="margin: 0;"><strong>Revised version (v${version}) &mdash; resubmitted after your revision request${when ? ` of ${this.escHtmlPlain(when)}` : ''}.</strong> The creator has updated this opportunity; please review the revised version and give your ${reviewerWord} decision.</p>${feedback}<p style="margin: 8px 0 0 0;">This email carries a <strong>new review link</strong>. The link in the earlier email no longer works.</p></div>`;
+    }
+    const sent = new Date().toLocaleString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    return `<div style="${box}"><p style="margin: 0;"><strong>Reminder (sent ${this.escHtmlPlain(sent)}):</strong> this opportunity is still waiting for your ${reviewerWord} decision. The button below is the current review link.</p></div>`;
+  }
+
+  private reviewerEmailSubject(
+    base: string,
+    projectTitle: string,
+    context: ReviewerEmailContext | undefined,
+    revisedWord: string,
+  ): string {
+    if (context?.kind === 'resubmission') {
+      const version =
+        context.version && context.version > 1 ? context.version : 2;
+      return `CIEL PK — revised opportunity (v${version}) ready for ${revisedWord}: ${projectTitle}`;
+    }
+    if (context?.kind === 'reminder') {
+      return `Reminder — ${base}: ${projectTitle}`;
+    }
+    return `${base}: ${projectTitle}`;
+  }
+
   async sendPartnerVerification(
     to: string,
     projectTitle: string,
@@ -1503,6 +1571,7 @@ export class MailService {
       path?: string;
       introText?: string;
       ctaLabel?: string;
+      context?: ReviewerEmailContext;
     },
   ) {
     const from =
@@ -1514,6 +1583,10 @@ export class MailService {
       returnTo: options?.returnTo,
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
+    const contextBlock = this.reviewerEmailContextBlock(
+      options?.context,
+      'partner',
+    );
     const customLead = options?.introText?.trim();
     const postFacultyContext = !!customLead;
     const ctaLabel = (options?.ctaLabel || 'View Opportunity Details').trim();
@@ -1581,6 +1654,7 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
         <p style="margin: 0 0 16px 0;">Dear ${dearPartner},</p>
+        ${contextBlock}
         ${leadParagraph}
         <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
         <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
@@ -1611,7 +1685,12 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to,
-        subject: `CIEL PK — partner verification requested: ${projectTitle}`,
+        subject: this.reviewerEmailSubject(
+          'CIEL PK — partner verification requested',
+          projectTitle,
+          options?.context,
+          'partner verification',
+        ),
         html,
       });
       this.logger.log(`Partner verification email sent to ${to}`);
@@ -1689,8 +1768,17 @@ export class MailService {
     projectTitle: string,
     token: string,
     details?: OpportunityVerificationEmailDetails,
-    options?: { returnTo?: string; path?: string },
+    options?: {
+      returnTo?: string;
+      path?: string;
+      context?: ReviewerEmailContext;
+    },
   ) {
+    const contextBlock = this.reviewerEmailContextBlock(
+      options?.context,
+      'faculty',
+    );
+    const resubmitted = options?.context?.kind === 'resubmission';
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
@@ -1731,8 +1819,17 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
         <p style="margin: 0 0 16px 0;">Dear ${dearLine},</p>
-        <p style="margin: 0 0 16px 0;">A student has submitted a new opportunity on CIEL PK and listed you as the faculty reviewer for this project.</p>
-        <p style="margin: 0 0 20px 0;">You are requested to review the opportunity details and provide your approval decision.</p>
+        ${contextBlock}
+        <p style="margin: 0 0 16px 0;">${
+          resubmitted
+            ? 'The student has resubmitted the opportunity you returned for revision on CIEL PK. You are listed as the faculty reviewer for this project.'
+            : 'A student has submitted a new opportunity on CIEL PK and listed you as the faculty reviewer for this project.'
+        }</p>
+        <p style="margin: 0 0 20px 0;">${
+          resubmitted
+            ? 'You are requested to review the revised opportunity details and provide your approval decision.'
+            : 'You are requested to review the opportunity details and provide your approval decision.'
+        }</p>
         <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
         <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
           <li style="margin-bottom: 6px;"><strong>Project Title:</strong> ${titleEsc}</li>
@@ -1767,7 +1864,12 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to,
-        subject: `CIEL PK — faculty approval requested: ${projectTitle}`,
+        subject: this.reviewerEmailSubject(
+          'CIEL PK — faculty approval requested',
+          projectTitle,
+          options?.context,
+          'your approval',
+        ),
         html,
       });
       this.logger.log(

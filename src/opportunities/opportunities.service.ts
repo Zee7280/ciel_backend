@@ -45,6 +45,7 @@ import {
 import {
   MailService,
   OpportunityVerificationEmailDetails,
+  ReviewerEmailContext,
 } from '../mail/mail.service';
 import { isUUID } from 'class-validator';
 import { randomUUID } from 'crypto';
@@ -1478,8 +1479,10 @@ export class OpportunitiesService {
           'No faculty email is saved on this opportunity.',
         );
       }
-      const sent =
-        await this.notifyFacultyForStudentOpportunityVerification(opp);
+      const sent = await this.notifyFacultyForStudentOpportunityVerification(
+        opp,
+        { reminder: true },
+      );
       if (!sent) {
         throw new BadRequestException(
           `The email could not be sent to ${facultyTo}. The mail server rejected it.`,
@@ -1508,7 +1511,9 @@ export class OpportunitiesService {
           'No partner email is saved on this opportunity.',
         );
       }
-      const sent = await this.sendPartnerApprovalEmail(opp);
+      const sent = await this.sendPartnerApprovalEmail(opp, undefined, {
+        reminder: true,
+      });
       if (!sent) {
         throw new BadRequestException(
           `The email could not be sent to ${partnerTo}. The mail server rejected it.`,
@@ -1572,12 +1577,50 @@ export class OpportunitiesService {
     }
   }
 
+  /**
+   * What a reviewer's verification email must say about itself. A re-review after that reviewer's
+   * own revision request is a *resubmission* (new version, fresh link, their feedback quoted); a
+   * student-triggered resend is a *reminder*. Without this the second email repeats the first one
+   * word for word under the same subject, and Gmail collapses it into a blank-looking thread.
+   */
+  private reviewerEmailContext(
+    opp: Opportunity,
+    line: 'faculty' | 'partner',
+    reminder?: boolean,
+  ): ReviewerEmailContext | undefined {
+    if (reminder) return { kind: 'reminder' };
+    const history = Array.isArray(opp.approvalHistory)
+      ? opp.approvalHistory
+      : [];
+    const lines = line === 'partner' ? ['partner', 'ngo'] : ['faculty'];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const entry = history[i];
+      if (!entry || !lines.includes(entry.line)) continue;
+      if (entry.action !== 'revision_requested') return undefined;
+      const version = opp.version || 1;
+      if (version <= (entry.version || 1)) return undefined;
+      return {
+        kind: 'resubmission',
+        version,
+        previousFeedback: entry.reason ?? null,
+        feedbackAt: entry.at ?? null,
+      };
+    }
+    return undefined;
+  }
+
   async notifyFacultyForStudentOpportunityVerification(
     opportunity: Opportunity,
+    options?: { reminder?: boolean },
   ): Promise<boolean> {
     const facultyTo = this.getFacultyEmailFromOpportunity(opportunity);
     if (!facultyTo || !opportunity.faculty_verification_token) return false;
     await this.ensureUsableReviewerToken(opportunity, 'faculty');
+    const context = this.reviewerEmailContext(
+      opportunity,
+      'faculty',
+      options?.reminder,
+    );
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(
@@ -1600,6 +1643,7 @@ export class OpportunitiesService {
         {
           path: '/verify/faculty',
           returnTo: this.getFacultyApprovalReturnTo(opportunity.id),
+          context,
         },
       );
       return true;
@@ -2468,6 +2512,7 @@ export class OpportunitiesService {
   private async sendPartnerApprovalEmail(
     opportunity: Opportunity,
     introText?: string,
+    options?: { reminder?: boolean },
   ): Promise<boolean> {
     const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
     if (!partnerEmail) {
@@ -2478,6 +2523,11 @@ export class OpportunitiesService {
       return false;
     }
     await this.ensureUsableReviewerToken(opportunity, 'partner');
+    const context = this.reviewerEmailContext(
+      opportunity,
+      'partner',
+      options?.reminder,
+    );
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const details = this.buildOpportunityVerificationEmailDetails(opportunity, {
@@ -2497,9 +2547,13 @@ export class OpportunitiesService {
           returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
           introText:
             introText ??
-            `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
-              'Please review the partner execution scope to continue this opportunity in CIEL.',
+            (context?.kind === 'resubmission'
+              ? `The creator has resubmitted <strong>${this.escHtml(opportunity.title)}</strong> after your revision request. ` +
+                'Please review the revised partner execution scope to continue this opportunity in CIEL.'
+              : `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
+                'Please review the partner execution scope to continue this opportunity in CIEL.'),
           ctaLabel: 'Review partner approval',
+          context,
         },
       );
       return true;

@@ -1405,6 +1405,27 @@ export class FacultyService {
             opp.sdg ||
             (opp.sdg_info as OpportunitySdgInfoJson)?.sdg_id ||
             'N/A',
+          // Supporting SDGs too, so the approvals list shows every registered goal (not only the primary).
+          secondary_sdgs: Array.isArray(opp.secondary_sdgs)
+            ? (opp.secondary_sdgs as unknown[])
+            : [],
+          sdg_ids: [
+            opp.sdg || (opp.sdg_info as OpportunitySdgInfoJson)?.sdg_id || null,
+            ...(Array.isArray(opp.secondary_sdgs)
+              ? opp.secondary_sdgs
+              : []
+            ).map((row: unknown) =>
+              row && typeof row === 'object'
+                ? ((row as { sdg_id?: unknown }).sdg_id ?? null)
+                : row,
+            ),
+          ]
+            .map((v) =>
+              typeof v === 'string' || typeof v === 'number'
+                ? String(v).trim()
+                : '',
+            )
+            .filter((v, i, all) => v && all.indexOf(v) === i),
           opportunityStatus: opp.status,
           workflowStage: opp.workflowStage ?? null,
           workflow_stage: opp.workflowStage ?? null,

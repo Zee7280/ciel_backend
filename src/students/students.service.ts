@@ -2391,6 +2391,11 @@ export class StudentsService {
         timeline: opportunity.timeline as unknown,
         required_hours: this.resolveRequiredHoursPerStudent(opportunity) || 16,
         sdg_info: opportunity.sdg_info as unknown,
+        // Supporting SDGs registered at create time: the report's mission card, Section 3 and the
+        // impact package read them from this payload (without it only the primary SDG showed).
+        secondary_sdgs: Array.isArray(opportunity.secondary_sdgs)
+          ? (opportunity.secondary_sdgs as unknown)
+          : [],
         objectives: opportunity.objectives as unknown,
         activity_details: opportunity.activity_details as unknown,
         supervision: opportunity.supervision as unknown,

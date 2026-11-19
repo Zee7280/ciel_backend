@@ -1983,6 +1983,12 @@ export class MailService {
     title: string,
     message: string,
     reason?: string | null,
+    options?: {
+      /** Deep link to the exact place on cielpk.com where the student acts (e.g. My Opportunities › Action Required). */
+      actionHref?: string;
+      actionLabel?: string;
+      actionHint?: string;
+    },
   ) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -1990,6 +1996,16 @@ export class MailService {
     const titleEsc = this.escHtmlPlain(projectTitle);
     const messageEsc = this.escHtmlPlain(message);
     const headingEsc = this.escHtmlPlain(title);
+    const actionHref = (options?.actionHref || '').trim();
+    const actionBlock = actionHref
+      ? `<p style="margin:28px 0 0 0;"><a href="${this.escHtmlPlain(actionHref)}" style="display:inline-block;background-color:#0e7d74;color:#ffffff;padding:13px 26px;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">${this.escHtmlPlain(
+          options?.actionLabel || 'Open on CIEL PK',
+        )}</a></p>${
+          options?.actionHint
+            ? `<p style="margin:10px 0 0 0;font-size:13px;color:#64748b;line-height:1.5;">${this.escHtmlPlain(options.actionHint)}</p>`
+            : ''
+        }<p style="margin:14px 0 0 0;font-size:12px;color:#94a3b8;word-break:break-all;">If the button does not open, copy this link: ${this.escHtmlPlain(actionHref)}</p>`
+      : '';
     const reasonBlock =
       reason && reason.trim()
         ? `<p style="margin:24px 0 0 0;font-size:14px;"><strong>Reason / feedback:</strong></p><p style="background:#f8fafc;border-left:4px solid #94a3b8;padding:12px 14px;margin:8px 0 0 0;color:#334155;font-size:14px;line-height:1.5;">${this.escHtmlPlain(
@@ -2011,6 +2027,7 @@ export class MailService {
               <p style="margin:0 0 18px 0;font-size:17px;font-weight:700;line-height:1.35;color:#000000;">${titleEsc}</p>
               <p style="margin:0;font-size:15px;font-weight:400;line-height:1.6;color:#111827;">${messageEsc}</p>
               ${reasonBlock}
+              ${actionBlock}
             </td>
           </tr>
         </table>

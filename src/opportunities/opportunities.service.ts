@@ -2432,6 +2432,20 @@ export class OpportunitiesService {
     }
 
     if (creator.email && !input.skipStatusEmail) {
+      // A revision lands the student in My Opportunities › Action Required: the email must take
+      // them exactly there (the dashboard, never a reviewer verification link).
+      const inRevision =
+        opportunity.isStudentCreated &&
+        (opportunity.workflowStage === WORKFLOW_STAGE.REVISION ||
+          String(opportunity.status || '').toLowerCase() === 'revision');
+      const action = inRevision
+        ? {
+            actionHref: `${this.frontendOrigin() || 'https://cielpk.com'}/dashboard/student/paths/community-service?view=create&filter=action&opportunity=${encodeURIComponent(opportunity.id)}`,
+            actionLabel: 'Open My Opportunities › Action Required',
+            actionHint:
+              'Sign in to cielpk.com with your student account, apply the feedback and resubmit. The opportunity moves forward only after you resubmit.',
+          }
+        : undefined;
       try {
         await this.mailService.sendStudentOpportunityStatusUpdate(
           creator.email,
@@ -2440,6 +2454,7 @@ export class OpportunitiesService {
           input.emailTitle || input.title,
           input.emailMessage || input.message,
           input.reason,
+          action,
         );
       } catch (error) {
         console.warn(

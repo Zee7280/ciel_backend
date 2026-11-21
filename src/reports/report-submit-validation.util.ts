@@ -87,7 +87,8 @@ const FIELD_WORD_POLICY: Record<string, { min: number; max: number }> = {
   contribution_intent_statement: { min: 30, max: 80 },
   student_contribution_intent_statement: { min: 10, max: 60 },
   justification_text: { min: 10, max: 60 },
-  observed_change: { min: 40, max: 100 },
+  // V19: "describe only what you observed; if nothing could be measured, say so" — short is fine.
+  observed_change: { min: 8, max: 100 },
   challenges: { min: 15, max: 60 },
   continuation_details: { min: 60, max: 120 },
   description: { min: 15, max: 60 },
@@ -151,8 +152,14 @@ function competencyScoresComplete(value: unknown): boolean {
   return COMPETENCY_SCORE_KEYS.every((key) => Number(scores[key]) >= 1);
 }
 
-/** Mirrors frontend validateSection4: a titled quantity, a legacy output string, or beneficiary reach. */
+/**
+ * Mirrors frontend validateSection4: a titled quantity, a legacy output string, beneficiary reach,
+ * or (V19) the explicit "no countable output is applicable" declaration with its reason.
+ */
 function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
+  if (block.no_output === true) {
+    return stringField(block.no_output_reason).trim().length > 0;
+  }
   const outputs = Array.isArray(block.outputs) ? block.outputs : [];
   const hasOutput = outputs.some((entry) => {
     if (typeof entry === 'string') return entry.trim().length > 0;
@@ -643,16 +650,49 @@ function validateCoreSectionsPresence(report: {
       'Observed change narrative',
     );
   }
-  const outcomes = Array.isArray(section5.measurable_outcomes)
+  // V19: the single before / after result is optional; when started it must be complete. Older
+  // detailed outcomes (no `simple` flag) keep their original rules.
+  const allOutcomes = Array.isArray(section5.measurable_outcomes)
     ? section5.measurable_outcomes
     : [];
-  if (!outcomes.length) {
-    issues.push({
-      section: 5,
-      field: 'measurable_outcomes',
-      message: 'At least one measurable outcome is required',
-    });
-  } else {
+  allOutcomes.forEach((entry, index) => {
+    const outcome = (entry || {}) as Record<string, unknown>;
+    if (outcome.simple !== true) return;
+    const filled = [
+      stringField(outcome.metric),
+      stringField(outcome.unit),
+      stringifyLoose(outcome.baseline ?? ''),
+      stringifyLoose(outcome.endline ?? ''),
+      stringField(outcome.measurement_explanation),
+    ].filter((v) => v.trim().length > 0).length;
+    if (!filled) return;
+    const need = (key: string, message: string) =>
+      issues.push({
+        section: 5,
+        field: `measurable_outcomes.${index}.${key}`,
+        message,
+      });
+    if (!stringField(outcome.metric).trim())
+      need('metric', 'Name what was measured, or clear the optional result');
+    if (!stringField(outcome.unit).trim())
+      need('unit', 'Choose the unit of the measured result');
+    if (
+      !Number.isFinite(Number(stringifyLoose(outcome.baseline ?? '').trim())) ||
+      stringifyLoose(outcome.baseline ?? '').trim() === ''
+    )
+      need('baseline', 'Enter the before value (a number)');
+    if (
+      !Number.isFinite(Number(stringifyLoose(outcome.endline ?? '').trim())) ||
+      stringifyLoose(outcome.endline ?? '').trim() === ''
+    )
+      need('endline', 'Enter the after value (same unit)');
+    if (!stringField(outcome.measurement_explanation).trim())
+      need('measurement_explanation', 'Say where these figures come from');
+  });
+  const outcomes = allOutcomes.filter(
+    (entry) => ((entry || {}) as Record<string, unknown>).simple !== true,
+  );
+  {
     outcomes.forEach((entry, index) => {
       const outcome = (entry || {}) as Record<string, unknown>;
       if (!outcome.outcome_area) {

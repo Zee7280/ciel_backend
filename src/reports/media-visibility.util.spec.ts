@@ -32,11 +32,13 @@ describe('media-visibility.util', () => {
     expect(hasPublicSharePermission({ public_share_permission: false })).toBe(
       false,
     );
+    // The V19 authenticity / consent confirmation never doubles as public-share permission.
     expect(
       hasPublicSharePermission({
         ethical_compliance: { privacy_respected: true },
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(hasPublicSharePermission({ consent_informed: true })).toBe(true);
   });
 
   it('persists canonical keys and clears the public flag when not Public', () => {
@@ -65,6 +67,16 @@ describe('media-visibility.util', () => {
       media_visible: 'public',
       media_usage: 'public',
       ethical_compliance: { privacy_respected: true },
+      public_share_permission: false,
+    });
+    expect(
+      persistSection8Visibility({
+        media_visible: 'public',
+        public_share_permission: true,
+      }),
+    ).toEqual({
+      media_visible: 'public',
+      media_usage: 'public',
       public_share_permission: true,
     });
     expect(PUBLIC_EVIDENCE_LOCKED_LABEL).toContain('not publicly available');

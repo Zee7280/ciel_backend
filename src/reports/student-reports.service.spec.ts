@@ -51,6 +51,7 @@ const MIN_VALID_SUBMIT_SECTIONS = {
     },
   },
   section5: {
+    story_because: 'Team records and partner feedback',
     observed_change:
       'Households report improved water quality and fewer stomach illnesses since the filters were installed, with several families noting that children miss fewer school days and that water now looks and tastes noticeably cleaner than before the project began, according to informal household feedback collected during follow-up visits.',
     challenges:

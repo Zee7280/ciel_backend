@@ -181,6 +181,18 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
  * its FIELD_WORD_POLICY word-count ranges (see checkWordRange above) — a direct API submit can no
  * longer skip either the required fields or the word-count minimums the wizard UI already enforces.
  */
+/** All four wizard flags (authentic, informed consent, no harm, privacy) — one confirmation statement in the UI. */
+export function evidenceEthicsConfirmed(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const flags = value as Record<string, unknown>;
+  return [
+    'authentic',
+    'informed_consent',
+    'no_harm',
+    'privacy_respected',
+  ].every((key) => flags[key] === true);
+}
+
 function hasChosenValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   return (
@@ -555,6 +567,21 @@ function validateCoreSectionsPresence(report: {
     : [];
   secondarySdgs.forEach((entry, index) => {
     const sdg = (entry || {}) as Record<string, unknown>;
+    // V19 3.2 — a student-discovered SDG is only credible with its Target and Indicator.
+    if (!stringField(sdg.target_id).trim()) {
+      issues.push({
+        section: 3,
+        field: `secondary_sdgs.${index}.target_id`,
+        message: `Additional SDG ${index + 1}: choose the closest genuine target`,
+      });
+    }
+    if (!stringField(sdg.indicator_id).trim()) {
+      issues.push({
+        section: 3,
+        field: `secondary_sdgs.${index}.indicator_id`,
+        message: `Additional SDG ${index + 1}: the indicator is mandatory`,
+      });
+    }
     if (!stringField(sdg.justification_text).trim()) {
       issues.push({
         section: 3,
@@ -747,6 +774,19 @@ function validateCoreSectionsPresence(report: {
       section5.observed_change,
       'Observed change narrative',
     );
+  }
+  // V19 4.3 — the results story has three blanks: before (carried from Section 2), what changed,
+  // and how you know. The last one is the evidence basis for the claim and cannot be blank.
+  if (
+    !stringField(section5.story_because).trim() &&
+    !listHasItems(section5.evidence_basis_tags)
+  ) {
+    issues.push({
+      section: 5,
+      field: 'story_because',
+      message:
+        'How do you know? — name the evidence behind the change (or say that no change could be measured yet)',
+    });
   }
   // V19: the single before / after result is optional; when started it must be complete. Older
   // detailed outcomes (no `simple` flag) keep their original rules.
@@ -1115,6 +1155,43 @@ export function validateReportSectionsForSubmit(report: {
       resources.forEach((entry, index) => {
         if (!entry || typeof entry !== 'object') return;
         const res = entry as Record<string, unknown>;
+        // V19 6.2 — a resource entry is complete only with type, quantity/value, unit, source(s)
+        // and verification method(s); the UI marks all five as required.
+        if (!stringField(res.type).trim()) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.type`,
+            message: 'Choose the resource type',
+          });
+        }
+        if (!stringField(res.amount).trim()) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.amount`,
+            message: 'Enter the amount or quantity',
+          });
+        }
+        if (!stringField(res.unit).trim()) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.unit`,
+            message: 'Choose the unit',
+          });
+        }
+        if (!listHasItems(res.sources)) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.sources`,
+            message: 'Choose at least one source for this resource',
+          });
+        }
+        if (!listHasItems(res.verification)) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.verification`,
+            message: 'Choose at least one verification method',
+          });
+        }
         if (!stringField(res.purpose).trim()) {
           issues.push({
             section: 6,
@@ -1261,13 +1338,9 @@ export function validateReportSectionsForSubmit(report: {
         message: 'Say what kind of document this is',
       });
     }
-    if (!stringField(section8.description).trim()) {
-      issues.push({
-        section: 8,
-        field: 'description',
-        message: 'What does your evidence show? is required',
-      });
-    } else {
+    // The caption is optional (V19 8.2 "What does my/our evidence show? (Optional)"); only a
+    // caption that is given has to respect the 10–45 word meter — same as the wizard.
+    if (stringField(section8.description).trim()) {
       checkWordRange(
         issues,
         8,
@@ -1277,6 +1350,16 @@ export function validateReportSectionsForSubmit(report: {
         'evidence_caption',
       );
     }
+  }
+  // V19 8.2 — the consolidated authenticity / consent / privacy confirmation is mandatory for
+  // every report, whether or not extra evidence was added (the wizard stores it as four flags).
+  if (!evidenceEthicsConfirmed(section8.ethical_compliance)) {
+    issues.push({
+      section: 8,
+      field: 'ethical_compliance',
+      message:
+        'Confirm that the evidence is authentic, relates to this project, and that consent and privacy details are reported accurately',
+    });
   }
 
   if (

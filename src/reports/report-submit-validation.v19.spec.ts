@@ -70,6 +70,7 @@ function report(overrides: Record<string, unknown> = {}) {
       },
     },
     section5: {
+      story_because: 'Team records and partner feedback',
       observed_change:
         'Working lights were installed in two classrooms; learning improvement has not been assessed yet.',
       challenges: words(20),

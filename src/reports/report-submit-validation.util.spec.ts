@@ -63,6 +63,7 @@ const VALID_CORE_SECTIONS = {
       'Households report improved water quality and fewer stomach illnesses since the filters were installed, with several families noting that children miss fewer school days and that water now looks and tastes noticeably cleaner than before the project began, according to informal household feedback collected during follow-up visits.',
     challenges:
       'Replacement parts were hard to find locally in the first week, and the team had to travel to a neighboring town to source the correct filter cartridges before installation could continue.',
+    story_because: 'Household register and follow-up visits by the team',
     measurable_outcomes: [
       {
         outcome_area: 'Health',
@@ -226,12 +227,13 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.some((i) => i.section === 8)).toBe(false);
   });
 
-  it('accepts Restricted/Private without the old four ethics checkboxes', () => {
+  it('accepts Restricted/Private once the V19 authenticity / consent confirmation is ticked', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section8: {
         has_evidence: 'no',
         media_visible: 'restricted',
+        ethical_compliance: WIZARD_ETHICS,
       },
     });
     expect(issues.filter((i) => i.section === 8)).toEqual([]);
@@ -243,6 +245,7 @@ describe('validateReportSectionsForSubmit', () => {
       section8: {
         has_evidence: 'no',
         media_visible: 'public',
+        ethical_compliance: WIZARD_ETHICS,
       },
     });
     expect(
@@ -256,6 +259,7 @@ describe('validateReportSectionsForSubmit', () => {
         has_evidence: 'no',
         media_visible: 'public',
         public_share_permission: true,
+        ethical_compliance: WIZARD_ETHICS,
       },
     });
     expect(ok.filter((i) => i.section === 8)).toEqual([]);
@@ -973,8 +977,8 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.filter((i) => i.section === 8)).toEqual([]);
   });
 
-  it('requires the Step 7 caption when extra evidence is yes', () => {
-    const issues = validateReportSectionsForSubmit({
+  it('V19 8.2 · the Step 7 caption is optional; a given caption must fit the 10–45 word meter', () => {
+    const blank = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section8: {
         has_evidence: 'yes',
@@ -986,7 +990,21 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      issues.some((i) => i.section === 8 && i.field === 'description'),
+      blank.some((i) => i.section === 8 && i.field === 'description'),
+    ).toBe(false);
+    const short = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'yes',
+        evidence_types: ['Attendance sheet'],
+        evidence_files: ['https://cdn.example/sheet.jpg'],
+        description: 'photos of the day',
+        media_visible: 'internal',
+        ethical_compliance: WIZARD_ETHICS,
+      },
+    });
+    expect(
+      short.some((i) => i.section === 8 && i.field === 'description'),
     ).toBe(true);
   });
 
@@ -1049,5 +1067,148 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.filter((i) => i.section === 4 || i.section === 5)).toEqual(
       [],
     );
+  });
+});
+
+describe('V19 spec audit · structural gates that were missing', () => {
+  const run = (patch: Record<string, unknown>) =>
+    validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      ...patch,
+    } as Parameters<typeof validateReportSectionsForSubmit>[0]);
+  const fields = (patch: Record<string, unknown>, section: number) =>
+    run(patch)
+      .filter((i) => i.section === section)
+      .map((i) => i.field);
+
+  it('3.2 · a student-added SDG needs its Target and Indicator, not only the justification', () => {
+    const base = VALID_CORE_SECTIONS.section3 as Record<string, unknown>;
+    const added = {
+      goal_number: 6,
+      justification_text:
+        'Clean water storage at the school reduced the children exposure to contaminated supply during lessons.',
+    };
+    expect(
+      fields({ section3: { ...base, secondary_sdgs: [added] } }, 3),
+    ).toEqual(
+      expect.arrayContaining([
+        'secondary_sdgs.0.target_id',
+        'secondary_sdgs.0.indicator_id',
+      ]),
+    );
+    expect(
+      fields(
+        {
+          section3: {
+            ...base,
+            secondary_sdgs: [
+              { ...added, target_id: '6.1', indicator_id: '6.1.1' },
+            ],
+          },
+        },
+        3,
+      ),
+    ).toEqual([]);
+  });
+
+  it('4.3 · "How do you know?" is required beside the observed change', () => {
+    const base = VALID_CORE_SECTIONS.section5 as Record<string, unknown>;
+    expect(fields({ section5: { ...base, story_because: '' } }, 5)).toContain(
+      'story_because',
+    );
+    expect(
+      fields(
+        {
+          section5: {
+            ...base,
+            story_because: '',
+            evidence_basis_tags: ['Photos'],
+          },
+        },
+        5,
+      ),
+    ).not.toContain('story_because');
+  });
+
+  it('6.2 · a resource entry needs type, amount, unit, a source and a verification method', () => {
+    const got = fields(
+      {
+        section6: {
+          use_resources: 'yes',
+          resources: [{ purpose: 'Paint for both classrooms' }],
+        },
+      },
+      6,
+    );
+    expect(got).toEqual(
+      expect.arrayContaining([
+        'resources.0.type',
+        'resources.0.amount',
+        'resources.0.unit',
+        'resources.0.sources',
+        'resources.0.verification',
+      ]),
+    );
+    expect(
+      fields(
+        {
+          section6: {
+            use_resources: 'yes',
+            resources: [
+              {
+                type: 'Cash / Funding',
+                amount: '8000',
+                unit: 'Cash — PKR',
+                sources: ['Student Team'],
+                verification: ['Evidence Uploaded'],
+                purpose: 'Paint for both classrooms',
+              },
+            ],
+          },
+        },
+        6,
+      ),
+    ).toEqual([]);
+  });
+
+  it('8.2 · the authenticity / consent confirmation is mandatory; the caption is optional', () => {
+    const base = VALID_CORE_SECTIONS.section8 as Record<string, unknown>;
+    expect(
+      fields(
+        { section8: { ...base, ethical_compliance: { authentic: true } } },
+        8,
+      ),
+    ).toContain('ethical_compliance');
+    expect(
+      fields({ section8: { ...base, ethical_compliance: undefined } }, 8),
+    ).toContain('ethical_compliance');
+    expect(
+      fields(
+        {
+          section8: {
+            ...base,
+            has_evidence: 'yes',
+            evidence_types: ['📋 Attendance sheet'],
+            evidence_files: ['https://x/a.jpg'],
+            description: '',
+          },
+        },
+        8,
+      ),
+    ).not.toContain('description');
+    expect(
+      fields(
+        {
+          section8: {
+            ...base,
+            has_evidence: 'yes',
+            evidence_types: ['📋 Attendance sheet'],
+            evidence_files: ['https://x/a.jpg'],
+            description: 'too short',
+          },
+        },
+        8,
+      ),
+    ).toContain('description');
   });
 });

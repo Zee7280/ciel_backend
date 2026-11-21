@@ -261,10 +261,10 @@ const SECTION2_RISK_FACTOR_LABELS: Record<string, string> = {
 };
 
 const SECTION2_CONSENT_LABELS: Record<string, string> = {
-  written: 'written consent obtained',
-  verbal: 'verbal consent obtained',
-  not_obtained: 'not obtained',
-  not_applicable: 'not applicable',
+  written: 'written consent obtained (student-reported)',
+  verbal: 'verbal consent obtained (student-reported)',
+  not_obtained: 'not obtained (student-reported)',
+  not_applicable: 'not applicable (student-reported)',
 };
 
 const SECTION2_OTHER_SLOT_RE = /^__o_(\d+)$/;
@@ -362,7 +362,7 @@ The student-facing baseline statement is composed from the 2.1 answers above and
 2.3 RISK, SAFEGUARDING & CONSENT${riskBlockAnswered ? '' : ' — not completed by the student'}
 - Identified risks: ${section2Line(riskLabels.join('; '))}
 - Precautions / safeguarding measures taken or planned: ${section2Line(section2Text(rec.risk_mitigation))}
-- Consent status for photographs and personal data: ${section2Line(consentLabel)}
+- Consent status for photographs and personal data, as declared by the student (not independently verified): ${section2Line(consentLabel)}
 - Responsible safeguarding person on site: ${leadRecorded ? 'named by the student (identity withheld from this summary; do not invent a name or role)' : '[not entered]'}
 - Unresolved risks or pending actions: ${section2Line(section2Text(rec.risk_unresolved))}`;
 }
@@ -582,6 +582,7 @@ interface SectionPromptData {
   contribution_intent_statement?: unknown;
   student_contribution_intent_statement?: unknown;
   secondary_sdgs?: unknown;
+  registered_secondary_contributions?: unknown;
   activity_blocks?: unknown;
   activities?: unknown;
   project_summary?: { distinct_total_beneficiaries?: unknown } | null;
@@ -1530,7 +1531,7 @@ SUMMARIZATION RULES
 4. Preserve every important figure exactly as entered, especially the number of intended beneficiaries. If no number was entered, do not estimate one.
 5. Describe only what was true before the project. Do not describe project activities, outputs or results as completed, and do not claim improvements.
 6. Distinguish observed facts, estimates, proposed/planned actions and verified information. Selected identification methods (for example "Survey Data" or "Needs Assessment") show how the student says the need was identified; do not state that these activities are proven or verified.
-7. Safeguarding: briefly integrate the identified risks and the precautions taken or planned, and state the consent status for photographs and personal data. Mention unresolved risks or pending/not-obtained consent where materially relevant. If no risks were identified, say so in a few words. If the block is marked not completed, note that safeguarding information was not provided; do not treat a blank as "no risk".
+7. Safeguarding: briefly integrate the identified risks and the precautions taken or planned, and state the consent status for photographs and personal data as something the student reports (for example "the student reports that written consent was obtained"); never present consent as verified, confirmed or approved by anyone else. Mention unresolved risks or pending/not-obtained consent where materially relevant. If no risks were identified, say so in a few words. If the block is marked not completed, note that safeguarding information was not provided; do not treat a blank as "no risk".
 8. Never invent data, improvements, safeguarding approvals, names, locations or results. Any item marked [not entered] is absent: leave it out or, where the reader would otherwise be misled, say it was not recorded. Never write the literal text "[not entered]".
 9. Do not merely join the answers together: interpret, organise and synthesise them, and do not duplicate the same point across the problem, baseline and needs.
 10. Clear, professional, third-person language suitable for university reporting ("the student", "the team"). Do not mention question numbers, field names or this prompt.
@@ -1613,6 +1614,7 @@ Target: ${String(data.primary_sdg?.target_id)}
 Indicator: ${String(data.primary_sdg?.indicator_id)}
 Contribution logic: ${String(data.contribution_intent_statement || data.student_contribution_intent_statement)}
 Secondary SDGs: ${JSON.stringify(data.secondary_sdgs || [])}
+Registered secondary SDG contributions (goal number → student statement): ${JSON.stringify(data.registered_secondary_contributions || {})}
 Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:

@@ -669,6 +669,110 @@ describe('validateReportSectionsForSubmit', () => {
     ).toBe(true);
   });
 
+  describe('V19 item 08 · attendance sessions without evidence', () => {
+    const s1 = (logs: unknown[]) => ({
+      privacy_consent: true,
+      review_checked: [true, true, true],
+      attendance_logs: logs,
+    });
+    const evidenceIssue = (
+      issues: ReturnType<typeof validateReportSectionsForSubmit>,
+    ) => issues.find((i) => i.section === 1 && i.field === 'attendance_logs');
+
+    it('blocks a counted session that has no evidence at all', () => {
+      const issues = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section1: s1([
+          { id: 'a', date: '2026-03-02', hours: 3, approval_status: 'pending' },
+        ]),
+      });
+      expect(evidenceIssue(issues)?.message).toContain(
+        '1 attendance session has no supporting evidence',
+      );
+      expect(evidenceIssue(issues)?.message).toContain('2026-03-02');
+    });
+
+    it('accepts any evidence shape the wizard or the API sends', () => {
+      const issues = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section1: s1([
+          { id: 'a', date: '2026-03-02', evidence_url: 'https://cdn/x.jpg' },
+          { id: 'b', date: '2026-03-03', evidenceUrl: 'https://cdn/y.jpg' },
+          { id: 'c', date: '2026-03-04', evidence_file: 'https://cdn/z.jpg' },
+          { id: 'd', date: '2026-03-05', evidence_file: true },
+          { id: 'e', date: '2026-03-06', evidenceUploaded: true },
+          { id: 'f', date: '2026-03-07', evidence_urls: ['https://cdn/w.jpg'] },
+        ]),
+      });
+      expect(evidenceIssue(issues)).toBeUndefined();
+    });
+
+    it('leaves approved / verified sessions and rejected sessions alone', () => {
+      const issues = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section1: s1([
+          { id: 'a', date: '2026-03-02', approval_status: 'approved' },
+          { id: 'b', date: '2026-03-03', entryStatus: 'verified' },
+          { id: 'c', date: '2026-03-04', approval_status: 'rejected' },
+        ]),
+      });
+      expect(evidenceIssue(issues)).toBeUndefined();
+    });
+
+    it('is silent for reports that carry no attendance_logs array (legacy payloads)', () => {
+      const issues = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section1: { privacy_consent: true, review_checked: [true, true, true] },
+      });
+      expect(evidenceIssue(issues)).toBeUndefined();
+    });
+  });
+
+  describe('V19 item 17 · contribution per registered secondary SDG', () => {
+    const fieldOf = (
+      issues: ReturnType<typeof validateReportSectionsForSubmit>,
+      goal: string,
+    ) =>
+      issues.find(
+        (i) =>
+          i.section === 3 &&
+          i.field === `registered_secondary_contributions.${goal}`,
+      );
+
+    it('requires a statement for every registered secondary SDG the wizard seeded', () => {
+      const issues = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section3: {
+          ...VALID_CORE_SECTIONS.section3,
+          registered_secondary_contributions: { '5': '', '8': 'too short' },
+        },
+      });
+      expect(fieldOf(issues, '5')?.message).toContain('Registered SDG 5');
+      expect(fieldOf(issues, '8')?.message).toContain('10–60 words');
+    });
+
+    it('accepts a 10–60 word statement per registered SDG and ignores reports without the map', () => {
+      const ok = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section3: {
+          ...VALID_CORE_SECTIONS.section3,
+          registered_secondary_contributions: {
+            '5': 'Women in the host community led the filter maintenance sessions and kept the water-quality log for their street.',
+          },
+        },
+      });
+      expect(fieldOf(ok, '5')).toBeUndefined();
+      const legacy = validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+      });
+      expect(
+        legacy.some((i) =>
+          i.field.startsWith('registered_secondary_contributions'),
+        ),
+      ).toBe(false);
+    });
+  });
+
   describe('Section 10 · 9.5 follow-up check', () => {
     const withFollowUp = (extra: Record<string, unknown>) =>
       validateReportSectionsForSubmit({

@@ -197,6 +197,54 @@ const RISK_NONE_ID = 'none';
  * risk chips (saved before 2.3 existed, or "None identified") is never blocked; once a real
  * risk is selected the mitigation, consent status and on-site lead become required.
  */
+type AttendanceLogLike = {
+  date?: unknown;
+  approval_status?: unknown;
+  approvalStatus?: unknown;
+  entryStatus?: unknown;
+  entry_status?: unknown;
+  evidence_file?: unknown;
+  evidence_url?: unknown;
+  evidenceUrl?: unknown;
+  evidence_urls?: unknown;
+  evidenceUploaded?: unknown;
+  evidence_uploaded?: unknown;
+};
+
+/** Mirrors the wizard's `logHasEvidence`: any URL, uploaded flag or attached file counts. */
+export function attendanceLogHasEvidence(log: AttendanceLogLike): boolean {
+  if (log.evidence_file) return true;
+  if (log.evidenceUploaded === true || log.evidence_uploaded === true)
+    return true;
+  for (const v of [log.evidence_url, log.evidenceUrl]) {
+    if (typeof v === 'string' && v.trim()) return true;
+  }
+  return Array.isArray(log.evidence_urls) && log.evidence_urls.length > 0;
+}
+
+/**
+ * Counted sessions (not rejected) that are neither approved / verified by a reviewer nor backed by
+ * evidence. Faculty-approved sessions are left alone: the reviewer already accepted them as logged.
+ */
+export function attendanceSessionsWithoutEvidence(
+  logs: unknown,
+): AttendanceLogLike[] {
+  if (!Array.isArray(logs)) return [];
+  return logs.filter((raw): raw is AttendanceLogLike => {
+    if (!raw || typeof raw !== 'object') return false;
+    const log = raw as AttendanceLogLike;
+    const approval = stringField(log.approval_status ?? log.approvalStatus)
+      .trim()
+      .toLowerCase();
+    const entry = stringField(log.entryStatus ?? log.entry_status)
+      .trim()
+      .toLowerCase();
+    if (approval === 'rejected') return false;
+    if (approval === 'approved' || entry === 'verified') return false;
+    return !attendanceLogHasEvidence(log);
+  });
+}
+
 export function validateRiskSafeguarding(
   section2: Record<string, unknown>,
 ): ReportSubmitValidationIssue[] {
@@ -346,6 +394,25 @@ function validateCoreSectionsPresence(report: {
       section: 1,
       field: 'privacy_consent',
       message: 'Privacy consent is required',
+    });
+  }
+  // V19 item 08 — every counted attendance session needs a photo / document. Sessions the
+  // faculty already approved or verified are trusted as they are; rejected ones do not count.
+  const sessionsWithoutEvidence = attendanceSessionsWithoutEvidence(
+    section1.attendance_logs,
+  );
+  if (sessionsWithoutEvidence.length) {
+    const dates = sessionsWithoutEvidence
+      .map((log) => stringField(log.date).slice(0, 10))
+      .filter(Boolean)
+      .slice(0, 5)
+      .join(', ');
+    issues.push({
+      section: 1,
+      field: 'attendance_logs',
+      message: `${sessionsWithoutEvidence.length} attendance session${
+        sessionsWithoutEvidence.length === 1 ? ' has' : 's have'
+      } no supporting evidence${dates ? ` (${dates})` : ''}. Add a photo or document to each session in Section 1, or remove it.`,
     });
   }
   const section2 = report.section2 || {};
@@ -505,6 +572,37 @@ function validateCoreSectionsPresence(report: {
       );
     }
   });
+  // V19 item 17 — one contribution statement per SDG registered on the opportunity. The wizard
+  // seeds a key per registered secondary SDG; a key left blank means the student skipped it.
+  // Older reports without the map are untouched (nothing to check).
+  const registeredContributions =
+    section3.registered_secondary_contributions &&
+    typeof section3.registered_secondary_contributions === 'object' &&
+    !Array.isArray(section3.registered_secondary_contributions)
+      ? (section3.registered_secondary_contributions as Record<string, unknown>)
+      : {};
+  Object.keys(registeredContributions)
+    .sort((a, b) => Number(a) - Number(b))
+    .forEach((goal) => {
+      const field = `registered_secondary_contributions.${goal}`;
+      const value = registeredContributions[goal];
+      if (!stringField(value).trim()) {
+        issues.push({
+          section: 3,
+          field,
+          message: `Registered SDG ${goal}: contribution statement is required`,
+        });
+      } else {
+        checkWordRange(
+          issues,
+          3,
+          field,
+          value,
+          `Registered SDG ${goal} contribution`,
+          'justification_text',
+        );
+      }
+    });
   if (
     !Array.isArray(section2.baseline_evidence) ||
     !section2.baseline_evidence.length

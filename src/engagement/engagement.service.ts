@@ -3279,6 +3279,54 @@ export class EngagementService {
     return { deleted: true };
   }
 
+  /**
+   * V19 item 08 — attach supporting evidence to a session that was saved without any.
+   * Same ownership rules as delete (seat owner, or the Team Lead who logged the proxy entry);
+   * verified / approved entries are frozen, so they cannot be edited this way either.
+   */
+  async attachAttendanceEvidence(
+    studentId: string,
+    participantId: string,
+    logId: string,
+    evidenceUrl: string,
+  ) {
+    const url = String(evidenceUrl || '').trim();
+    if (!/^https?:\/\/\S+$/i.test(url) || url.length > 2048) {
+      throw new BadRequestException(
+        'Upload the file first, then send its https URL as evidenceUrl.',
+      );
+    }
+    const participation =
+      await this.findParticipationByIdentifier(participantId);
+    if (!participation)
+      throw new NotFoundException('Participation record not found');
+    const { siblings } = await this.resolveSiblingSeats(participation);
+    const seatIds = Array.from(
+      new Set([participation.id, ...siblings.map((x) => x.id)]),
+    );
+    const log = await this.attendanceLogRepository.findOne({
+      where: { id: logId, participantId: In(seatIds) },
+    });
+    if (!log) throw new NotFoundException('Attendance log not found');
+    const isSeatOwner = participation.studentId === studentId;
+    const isProxyAuthor =
+      log.loggedByRole === 'team_lead' && log.loggedByUserId === studentId;
+    if (!isSeatOwner && !isProxyAuthor) {
+      throw new ForbiddenException(
+        'You can only add evidence to your own attendance entries',
+      );
+    }
+    if (log.approvalStatus === 'approved' || log.entryStatus === 'verified') {
+      throw new BadRequestException(
+        'This entry has already been verified and can no longer be edited.',
+      );
+    }
+    log.evidenceUrl = url;
+    log.evidenceUploaded = true;
+    await this.attendanceLogRepository.save(log);
+    return { id: log.id, evidenceUrl: url, evidenceUploaded: true };
+  }
+
   async getEngagementMetrics(participantId: string) {
     const participation = await this.findParticipationByIdentifier(
       participantId,

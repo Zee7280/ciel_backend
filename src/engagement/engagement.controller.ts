@@ -20,6 +20,7 @@ import { FormTeamFromLeadDto } from './dto/form-team-from-lead.dto';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
+import { AttachAttendanceEvidenceDto } from './dto/attach-attendance-evidence.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
@@ -199,6 +200,27 @@ export class EngagementController {
     return {
       success: true,
       data: result,
+    };
+  }
+
+  /** V19 item 08: add a photo / document to a session saved without evidence (seat owner or proxy author). */
+  @Patch(':id/attendance/:logId/evidence')
+  async attachAttendanceEvidence(
+    @Request() req: EngagementRequest,
+    @Param('id') id: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
+    @Body() dto: AttachAttendanceEvidenceDto,
+  ) {
+    const result = await this.engagementService.attachAttendanceEvidence(
+      req.user.id,
+      id,
+      logId,
+      dto.evidenceUrl,
+    );
+    return {
+      success: true,
+      data: result,
+      message: 'Evidence attached to the attendance entry',
     };
   }
 

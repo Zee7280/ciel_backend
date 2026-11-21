@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { safeguardingReviewNotes } from './safeguarding-review.util';
 import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description.constants';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import {
@@ -487,6 +488,20 @@ function mapSection2(
     local_context:
       pickString(section2.summary_text) ||
       pickString(section2.problem_statement),
+    // Section 2.3 as the student declared it, plus the reviewer attention notes (V19 items 13 / 15).
+    risk_safeguarding_consent: {
+      risk_factors: asArray(section2.risk_factors)
+        .map((v) => pickString(v))
+        .filter(Boolean),
+      mitigation: pickString(section2.risk_mitigation),
+      consent_status_student_reported: pickString(section2.risk_consent),
+      safeguarding_lead_named: Boolean(
+        pickString(section2.risk_safeguarding_lead),
+      ),
+      unresolved_risks: pickString(section2.risk_unresolved),
+      consent_independently_verified: false,
+      reviewer_attention_notes: safeguardingReviewNotes(section2),
+    },
   };
 }
 
@@ -516,6 +531,15 @@ function mapSection3(section3: UnknownRecord): UnknownRecord {
         status: pickString(row.status),
       };
     }),
+    // V19 item 17: the student's statement for each SDG registered as secondary on the opportunity.
+    registered_secondary_sdg_contributions: Object.entries(
+      asRecord(section3.registered_secondary_contributions),
+    )
+      .map(([goal, value]) => ({
+        sdg_number: pickNumber(goal),
+        contribution: pickString(value),
+      }))
+      .filter((row) => row.sdg_number != null && row.contribution),
     contribution_intent_statement:
       pickString(section3.contribution_intent_statement) ||
       pickString(section3.student_contribution_intent_statement),

@@ -111,6 +111,75 @@ function joinHref(base: string, path: string): string {
   return root ? `${root}${rel}` : rel;
 }
 
+export type ReportPackageNoticeAudience =
+  | 'student'
+  | 'faculty'
+  | 'partner'
+  | 'university';
+
+export type ReportPackageNotice = {
+  audience: ReportPackageNoticeAudience;
+  title: string;
+  message: string;
+  /** Relative dashboard path (the in-app notification opens it inside the same origin). */
+  link: string;
+};
+
+/** `https://app/…/x?y#z` → `/…/x?y#z`; relative paths pass through. */
+export function relativeAppPath(href: string): string {
+  const value = String(href || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const u = new URL(value);
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      return '';
+    }
+  }
+  return value.startsWith('/') ? value : `/${value}`;
+}
+
+/**
+ * In-app notices sent alongside the package e-mails once CIEL PK Admin approves a report. Each
+ * audience lands on its own approved-package screen (student: flashcard; faculty: Impact Records;
+ * partner / NGO: My Impact; university: Project Records), never on the raw report.
+ */
+export function buildReportPackageNotices(
+  pack: Pick<ReportReviewPackage, 'stakeholder_hrefs' | 'documents'>,
+  input: { projectTitle: string; studentName: string },
+): ReportPackageNotice[] {
+  const project = input.projectTitle || 'Community Service report';
+  const student = input.studentName || 'The student';
+  const notices: ReportPackageNotice[] = [
+    {
+      audience: 'student',
+      title: 'Your impact report is approved',
+      message: `CIEL PK approved your Community Service report for "${project}". Your flashcard, badge and permitted evidence are now on My Impact.`,
+      link: relativeAppPath(pack.documents.flashcard.href),
+    },
+    {
+      audience: 'faculty',
+      title: 'Impact Package published',
+      message: `CIEL PK approved ${student}'s report for "${project}". The approved package (flashcard, detailed report, permitted evidence) is open in Impact Records.`,
+      link: relativeAppPath(pack.stakeholder_hrefs.faculty),
+    },
+    {
+      audience: 'partner',
+      title: 'Impact Package published',
+      message: `CIEL PK approved the Community Service report for "${project}" linked to your organization. Open the approved package under My Impact.`,
+      link: relativeAppPath(pack.stakeholder_hrefs.partner),
+    },
+    {
+      audience: 'university',
+      title: 'Impact Package published',
+      message: `CIEL PK approved ${student}'s report for "${project}". The approved package is in Project Records and on your Impact Wall.`,
+      link: relativeAppPath(pack.stakeholder_hrefs.university),
+    },
+  ];
+  return notices.filter((n) => n.link);
+}
+
 export function buildReportReviewPackage(
   report: Pick<StudentReport, 'id' | 'opportunityId' | 'project_id'> &
     Partial<StudentReport>,

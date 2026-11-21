@@ -15,6 +15,22 @@ export interface NotificationListQuery {
   page?: string | number;
 }
 
+/** Only a relative dashboard path is stored (never an external or javascript: URL). */
+export function sameOriginPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const v = value.trim();
+  if (!v) return null;
+  if (/^https?:\/\//i.test(v)) {
+    try {
+      const u = new URL(v);
+      return `${u.pathname}${u.search}${u.hash}`.slice(0, 1024);
+    } catch {
+      return null;
+    }
+  }
+  return v.startsWith('/') && !v.startsWith('//') ? v.slice(0, 1024) : null;
+}
+
 @Injectable()
 export class NotificationsService {
   constructor(
@@ -24,13 +40,19 @@ export class NotificationsService {
 
   async createNotification(
     userId: string,
-    input: { type: string; title: string; message: string },
+    input: {
+      type: string;
+      title: string;
+      message: string;
+      link?: string | null;
+    },
   ) {
     const notification = this.notificationsRepository.create({
       userId,
       type: input.type,
       title: input.title,
       message: input.message,
+      link: sameOriginPath(input.link),
     });
 
     return this.notificationsRepository.save(notification);
@@ -40,11 +62,13 @@ export class NotificationsService {
     userId: string,
     title: string,
     message: string,
+    link?: string | null,
   ) {
     return this.createNotification(userId, {
       type: 'approval',
       title,
       message,
+      link,
     });
   }
 

@@ -665,6 +665,44 @@ export class OpportunitiesService {
     return null;
   }
 
+  /**
+   * The named partner / NGO (by the e-mail on the opportunity, else the hosting organisation's
+   * accounts) gets an in-app notice with a link when an opportunity naming them goes live. The
+   * creator already has their own notice. Never throws.
+   */
+  private async notifyPartnerOpportunityLive(
+    opportunity: Opportunity,
+  ): Promise<void> {
+    try {
+      const email = this.resolvePartnerEmailFromOpportunity(opportunity);
+      const byEmail = email
+        ? await this.usersRepository.findOne({ where: { email } })
+        : null;
+      const byOrg =
+        !byEmail && opportunity.organizationId
+          ? await this.usersRepository.find({
+              where: { organization: { id: opportunity.organizationId } },
+              take: 5,
+            })
+          : [];
+      const recipients = byEmail ? [byEmail] : byOrg || [];
+      for (const user of recipients) {
+        if (!user?.id || user.id === opportunity.creatorId) continue;
+        await this.notificationsService.createApprovalNotification(
+          user.id,
+          'Opportunity live',
+          `"${opportunity.title}" is now live on CIEL PK. Linked students, their reports and the verified impact will appear under your Community Service projects.`,
+          '/dashboard/partner/community-service?view=approvals&tab=done',
+        );
+      }
+    } catch (e) {
+      console.warn(
+        'Failed to create partner opportunity-live notification',
+        (e as Error).message,
+      );
+    }
+  }
+
   /** Same heuristics as {@link resolvePartnerEmail}, reading persisted opportunity JSON. */
   private resolvePartnerEmailFromOpportunity(opp: Opportunity): string | null {
     const json = jsonColumnsOf(opp);
@@ -2724,6 +2762,7 @@ export class OpportunitiesService {
       emailSubject: 'Your opportunity is now live',
       skipStatusEmail: true,
     });
+    await this.notifyPartnerOpportunityLive(opportunity);
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     if (creator?.email) {

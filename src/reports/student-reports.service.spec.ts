@@ -3569,9 +3569,21 @@ describe('StudentReportsService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('opens a submitted report on an opportunity inside the university scope', async () => {
+    it('keeps a submitted report closed to the university until CIEL PK Admin accepts it', async () => {
       mockStudentReportsRepository.findOne.mockResolvedValueOnce(
         row('submitted'),
+      );
+      await expect(
+        service.findOneForPartner('r-1', 'uni-org', {
+          viewerRole: 'university',
+          universityScopeOpportunityIds: [OPP],
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('opens an admin-accepted report on an opportunity inside the university scope', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(
+        row('submitted', { admin_status: 'approved' }),
       );
       const res = await service.findOneForPartner('r-1', 'uni-org', {
         viewerRole: 'university',

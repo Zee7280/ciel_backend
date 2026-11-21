@@ -29,6 +29,10 @@ export class Notification {
   @Column('text')
   message: string;
 
+  /** Same-origin dashboard path the notice opens (e.g. the approved Impact Package). Null for text-only notices. */
+  @Column({ type: 'varchar', length: 1024, nullable: true })
+  link: string | null;
+
   @Column({ default: false })
   isRead: boolean;
 

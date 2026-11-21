@@ -8,6 +8,10 @@ import {
   Optional,
 } from '@nestjs/common';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  REPORT_PACKAGE_LOCKED_MESSAGE,
+  isReportPackageReleased,
+} from './report-package-release.util';
 import { communityServicePublicCode } from '../opportunities/opportunity-approval-tracker.util';
 import { FollowUpsService } from '../followups/followups.service';
 import { ResourceContributorsService } from '../resource-contributors/resource-contributors.service';
@@ -71,6 +75,7 @@ import {
   type EvidenceViewerRole,
 } from './evidence-access.util';
 import {
+  buildReportPackageNotices,
   buildReportReviewPackage,
   reviewPackageIncludesAnalysis,
   type ReportReviewPackage,
@@ -3654,6 +3659,13 @@ export class StudentReportsService {
       }
     }
 
+    // The same people get an in-app notice that links straight to their approved-package screen
+    // (the e-mail alone was easy to miss and had no dashboard entry point).
+    await this.notifyStakeholdersPackagePublishedInApp(full, pack, {
+      projectTitle,
+      studentName,
+    });
+
     // Team Lead brief: external resource contributors get their appreciation email + certificate
     // once the report is published (exactly once per contribution; never blocks the package mail).
     if (this.resourceContributorsService) {
@@ -3681,9 +3693,8 @@ export class StudentReportsService {
       .replace(/\s+/g, ' ');
   }
 
-  private async resolveReportUniversityEmails(
-    report: StudentReport,
-  ): Promise<string[]> {
+  /** University accounts whose institution matches the student's (the report's observers). */
+  private async resolveReportUniversityUsers(report: StudentReport) {
     const studentUni = this.institutionKey(
       report.student?.university || report.student?.institution,
     );
@@ -3692,13 +3703,103 @@ export class StudentReportsService {
     const rows = await this.usersRepository.find({
       where: { role: UserRole.UNIVERSITY },
     });
-    return (rows || [])
-      .filter((row) => {
-        const uni = this.institutionKey(row.university || row.institution);
-        return uni && uni === studentUni;
-      })
+    return (rows || []).filter((row) => {
+      const uni = this.institutionKey(row.university || row.institution);
+      return uni && uni === studentUni;
+    });
+  }
+
+  private async resolveReportUniversityEmails(
+    report: StudentReport,
+  ): Promise<string[]> {
+    return (await this.resolveReportUniversityUsers(report))
       .map((row) => this.normalizeEmail(row.email))
       .filter((email) => email.includes('@'));
+  }
+
+  /**
+   * In-app "Impact Package published" notices with a link, one per connected stakeholder:
+   * student, assigned faculty, named partner / NGO and the university observers. Never throws
+   * and never blocks the e-mail package.
+   */
+  private async notifyStakeholdersPackagePublishedInApp(
+    full: StudentReport,
+    pack: ReportReviewPackage,
+    input: { projectTitle: string; studentName: string },
+  ): Promise<void> {
+    if (!this.notificationsService) return;
+    const notices = buildReportPackageNotices(pack, input);
+    const userIdByEmail = async (raw: string): Promise<string | null> => {
+      const email = this.normalizeEmail(raw);
+      if (
+        !email ||
+        !email.includes('@') ||
+        typeof this.usersRepository.findOne !== 'function'
+      ) {
+        return null;
+      }
+      try {
+        const user = await this.usersRepository.findOne({ where: { email } });
+        return user?.id ? String(user.id) : null;
+      } catch {
+        return null;
+      }
+    };
+    const recipients: Array<{
+      audience: (typeof notices)[number]['audience'];
+      userId: string;
+    }> = [];
+    try {
+      if (full.student?.id) {
+        recipients.push({
+          audience: 'student',
+          userId: String(full.student.id),
+        });
+      }
+      const facultyId =
+        full.faculty?.id ||
+        full.facultyId ||
+        (await userIdByEmail(
+          this.resolveReportFacultyEmail(full, full.opportunity),
+        ));
+      if (facultyId) {
+        recipients.push({ audience: 'faculty', userId: String(facultyId) });
+      }
+      const partnerId = await userIdByEmail(
+        this.resolveReportPartnerEmail(full.opportunity),
+      );
+      if (partnerId)
+        recipients.push({ audience: 'partner', userId: partnerId });
+      for (const uni of await this.resolveReportUniversityUsers(full)) {
+        if (uni?.id) {
+          recipients.push({ audience: 'university', userId: String(uni.id) });
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not resolve in-app package recipients for report ${full.id}: ${(error as Error)?.message}`,
+      );
+    }
+    const seen = new Set<string>();
+    for (const recipient of recipients) {
+      const key = `${recipient.audience}:${recipient.userId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const notice = notices.find((n) => n.audience === recipient.audience);
+      if (!notice) continue;
+      try {
+        await this.notificationsService.createNotification(recipient.userId, {
+          type: 'approval',
+          title: notice.title,
+          message: notice.message,
+          link: notice.link,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `In-app package notice (${recipient.audience}) failed for report ${full.id}: ${(error as Error)?.message}`,
+        );
+      }
+    }
   }
 
   /**
@@ -4887,18 +4988,10 @@ export class StudentReportsService {
     }
 
     const viewerRole = String(options?.viewerRole || '').toLowerCase();
-    // Partner / NGO / corporate receive the package only after CIEL PK Admin has accepted the
-    // report (University keeps its read-only review of submitted reports).
-    if (
-      viewerRole !== 'university' &&
-      !inUniversityScope &&
-      !['approved', 'verified'].includes(
-        String(report.admin_status || '').toLowerCase(),
-      )
-    ) {
-      throw new ForbiddenException(
-        'This report opens for partners after CIEL PK Admin has accepted it.',
-      );
+    // One rule for partner, NGO, corporate AND university: the package opens only after CIEL PK
+    // Admin has accepted the report. Before that every stakeholder sees the status row only.
+    if (!isReportPackageReleased(report)) {
+      throw new ForbiddenException(REPORT_PACKAGE_LOCKED_MESSAGE);
     }
 
     // Evidence links follow the project-level sharing rule: University / Faculty may view

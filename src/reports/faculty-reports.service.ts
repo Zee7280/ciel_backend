@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -60,6 +61,10 @@ import { describeReportDeadline } from '../report-reminders/report-reminder.util
 import { karachiToday } from '../followups/followup.util';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  REPORT_PACKAGE_LOCKED_MESSAGE,
+  isReportPackageReleased,
+} from './report-package-release.util';
 import {
   attendanceLogCountsTowardHours,
   hoursFromAttendanceLog,
@@ -1137,6 +1142,10 @@ export class FacultyReportsService {
       throw new NotFoundException(
         'Report not found, not assigned to you, or not yet submitted',
       );
+    }
+    // Faculty, like every other stakeholder, opens the package only after CIEL PK Admin approval.
+    if (!isReportPackageReleased(report)) {
+      throw new ForbiddenException(REPORT_PACKAGE_LOCKED_MESSAGE);
     }
 
     return StudentReportsService.withholdAnalysisForFacultyUntilApproved(

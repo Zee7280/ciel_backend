@@ -657,8 +657,24 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
 function mapSection5(section5: UnknownRecord): UnknownRecord {
   return {
     observed_change: pickString(section5.observed_change),
-    measurable_outcomes: asArray(section5.measurable_outcomes).map(
-      (entry, index) => {
+    // The old form saved an empty outcome row by default; it is not an outcome the AI should read.
+    measurable_outcomes: asArray(section5.measurable_outcomes)
+      .filter((entry) => {
+        const row = asRecord(entry);
+        // Same nine keys as `legacyOutcomeHasContent` in the submit gate.
+        return [
+          row.metric,
+          row.metric_other,
+          row.outcome_area,
+          row.outcome_sub_category,
+          row.unit,
+          row.unit_other,
+          row.baseline,
+          row.endline,
+          row.measurement_explanation,
+        ].some((v) => pickString(v) !== '');
+      })
+      .map((entry, index) => {
         const row = asRecord(entry);
         return {
           outcome_id:
@@ -683,8 +699,7 @@ function mapSection5(section5: UnknownRecord): UnknownRecord {
             .map((v) => pickString(v))
             .filter(Boolean),
         };
-      },
-    ),
+      }),
     outcome_evidence_summary: pickString(section5.summary_text),
     limitations: pickString(section5.limitations),
     challenges: pickString(section5.challenges),

@@ -1041,6 +1041,76 @@ describe('validateReportSectionsForSubmit', () => {
     ).toBe(true);
   });
 
+  it('a blank earlier-version outcome row never blocks submit; a row with content keeps its rules; a half-filled V19 result is flagged', () => {
+    // The old form saved an empty detailed row by default. The student cannot see it in the V19
+    // wizard, so it must not be the reason the report cannot be submitted.
+    const blankLegacy = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section5: {
+        ...VALID_CORE_SECTIONS.section5,
+        measurable_outcomes: [
+          {
+            id: 'old-1',
+            outcome_area: '',
+            outcome_sub_category: '',
+            metric_category: '',
+            metric: '',
+            baseline: '',
+            endline: '',
+            unit: '',
+            confidence_level: [],
+            measurement_explanation: '',
+          },
+        ],
+      },
+    });
+    expect(blankLegacy.filter((i) => i.section === 5)).toEqual([]);
+
+    // A legacy row that says something is still held to the detailed rules.
+    const partialLegacy = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section5: {
+        ...VALID_CORE_SECTIONS.section5,
+        measurable_outcomes: [{ id: 'old-2', baseline: '55', endline: '' }],
+      },
+    });
+    expect(
+      partialLegacy.filter((i) => i.section === 5).map((i) => i.field),
+    ).toEqual(
+      expect.arrayContaining([
+        'measurable_outcomes.0.outcome_area',
+        'measurable_outcomes.0.endline',
+        'measurable_outcomes.0.unit',
+      ]),
+    );
+
+    // The V19 single result: "Before 55, After blank, no unit" is incomplete and says so.
+    const halfSimple = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section5: {
+        ...VALID_CORE_SECTIONS.section5,
+        measurable_outcomes: [
+          {
+            id: 'oc-1',
+            simple: true,
+            metric: 'QA calculation test',
+            unit: '',
+            baseline: '55',
+            endline: '',
+            measurement_explanation: '',
+          },
+        ],
+      },
+    });
+    expect(
+      halfSimple.filter((i) => i.section === 5).map((i) => i.message),
+    ).toEqual([
+      'Choose the unit of the measured result',
+      'Enter the after value (same unit)',
+      'Say where these figures come from',
+    ]);
+  });
+
   it('accepts a V13 ladder activity plus a linked before/after outcome', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,

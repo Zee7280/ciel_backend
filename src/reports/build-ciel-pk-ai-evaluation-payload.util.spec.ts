@@ -334,6 +334,44 @@ describe('buildCielPkAiEvaluationPayload', () => {
     ).toEqual(['limited_budget']);
   });
 
+  it('drops blank earlier-version outcome rows from the AI payload but keeps rows with content', () => {
+    const payload = buildCielPkAiEvaluationPayload({
+      id: 'r1',
+      studentId: 's1',
+      section5: {
+        measurable_outcomes: [
+          {
+            id: 'old-blank',
+            outcome_area: '',
+            metric: '',
+            baseline: '',
+            endline: '',
+            unit: '',
+            confidence_level: [],
+          },
+          {
+            id: 'kept',
+            simple: true,
+            metric: 'Reading score',
+            baseline: '40',
+            endline: '55',
+            unit: 'score',
+          },
+        ],
+      },
+    } as unknown as StudentReport);
+    const outcomes = (
+      payload.section5_outcomes_systemic_change as {
+        measurable_outcomes: Array<{
+          outcome_id: string;
+          baseline_value: number | null;
+        }>;
+      }
+    ).measurable_outcomes;
+    expect(outcomes.map((o) => o.outcome_id)).toEqual(['kept']);
+    expect(outcomes[0].baseline_value).toBe(40);
+  });
+
   it('treats attendance-log hours as complete even when roster team_lead.hours is empty', () => {
     const payload = buildCielPkAiEvaluationPayload({
       id: 'r-hours',

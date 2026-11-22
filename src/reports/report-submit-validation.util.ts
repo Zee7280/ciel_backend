@@ -830,9 +830,14 @@ function validateCoreSectionsPresence(report: {
     if (!stringField(outcome.measurement_explanation).trim())
       need('measurement_explanation', 'Say where these figures come from');
   });
-  const outcomes = allOutcomes.filter(
-    (entry) => ((entry || {}) as Record<string, unknown>).simple !== true,
-  );
+  // Earlier-version detailed rows keep their rules only when they hold information: the old form
+  // saved an empty row by default, and a blank row the student cannot see must never block submit
+  // (mirrors `splitOutcomes` in the wizard).
+  const outcomes = allOutcomes.filter((entry) => {
+    const outcome = (entry || {}) as Record<string, unknown>;
+    if (outcome.simple === true) return false;
+    return legacyOutcomeHasContent(outcome);
+  });
   {
     outcomes.forEach((entry, index) => {
       const outcome = (entry || {}) as Record<string, unknown>;
@@ -1114,6 +1119,21 @@ function validateCoreSectionsPresence(report: {
   }
 
   return issues;
+}
+
+/** An earlier-version outcome row that says something (the old form saved an empty row by default). */
+export function legacyOutcomeHasContent(row: Record<string, unknown>): boolean {
+  return [
+    row.metric,
+    row.metric_other,
+    row.outcome_area,
+    row.outcome_sub_category,
+    row.unit,
+    row.unit_other,
+    row.baseline,
+    row.endline,
+    row.measurement_explanation,
+  ].some((v) => stringifyLoose(v ?? '').trim() !== '');
 }
 
 export function validateReportSectionsForSubmit(report: {

@@ -1,5 +1,5 @@
 /**
- * Ranking Studio + NPE-1.2 formula, end to end through the real routes (real Nest app + scratch
+ * Ranking Studio + NPE-1.3 formula, end to end through the real routes (real Nest app + scratch
  * Postgres). AI is never called: evaluations are seeded exactly as a finished analysis stores them.
  * Also proves the pre-existing flow (packages -> reviews -> official publish -> badges) and old
  * NPE-1.1 runs keep working.
@@ -306,7 +306,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     for (const s of specs) await seedReport(s);
     run = await h.ds.getRepository(NpeRankingRun).save(
       h.ds.getRepository(NpeRankingRun).create({
-        rubricVersion: 'NPE-1.2',
+        rubricVersion: 'NPE-1.3',
         scope: 'national',
         role: 'ciel_admin',
         status: 'draft',
@@ -342,7 +342,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
           judgment(k === 'impact' && s.impact != null ? s.impact : s.anchors),
         ]),
       ) as Judgments,
-      'NPE-1.2',
+      'NPE-1.3',
     ).total;
 
   // ---------------------------------------------------------------- access
@@ -359,16 +359,16 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     expect((await preview({}, null)).status).toBe(401);
   });
 
-  // ---------------------------------------------------------------- the NPE-1.2 formula
-  it('the packages route reports NPE-1.2 with weights that sum to 100 (90 criteria + 10 CII)', async () => {
+  // ---------------------------------------------------------------- the NPE-1.3 formula
+  it('the packages route reports NPE-1.3 with weights that sum to 100 (90 criteria + 10 CII)', async () => {
     const res = await packages();
     expect(res.status).toBe(200);
-    expect(res.body.data.rubricVersion).toBe('NPE-1.2');
+    expect(res.body.data.rubricVersion).toBe('NPE-1.3');
     const total = res.body.data.criteria.reduce((s, c) => s + c.weight, 0);
     expect(total).toBe(90);
     expect(res.body.data.packages).toHaveLength(4);
-    expect(res.body.data.run.rubricVersion).toBe('NPE-1.2');
-    // every ranked row carries the NPE-1.2 score, recomputed from the stored judgments
+    expect(res.body.data.run.rubricVersion).toBe('NPE-1.3');
+    // every ranked row carries the NPE-1.3 score, recomputed from the stored judgments
     for (const row of res.body.data.run.rows) {
       const spec = specs.find((s) => ids[s.name] === row.id)!;
       expect(row.status).toBe('Ranked');
@@ -381,7 +381,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
   });
 
   // ---------------------------------------------------------------- preview
-  it('overall excellence ranks every eligible project by the NPE-1.2 score', async () => {
+  it('overall excellence ranks every eligible project by the NPE-1.3 score', async () => {
     const res = await preview({ lens: 'excellence', groupBy: 'project' });
     expect(res.status).toBe(201);
     const { result } = res.body.data;
@@ -681,7 +681,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
   });
 
   // ---------------------------------------------------------------- existing flow is untouched
-  it('the existing official publish still works end to end and stores the NPE-1.2 snapshot', async () => {
+  it('the existing official publish still works end to end and stores the NPE-1.3 snapshot', async () => {
     const res = await typed<PublishRes>(
       h
         .as(admin)
@@ -698,7 +698,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       'select rubric_version, jsonb_array_length(standings) as n from npe_ranking_snapshots where id = $1',
       [res.body.data.snapshotId],
     );
-    expect(snap[0]).toMatchObject({ rubric_version: 'NPE-1.2', n: 4 });
+    expect(snap[0]).toMatchObject({ rubric_version: 'NPE-1.3', n: 4 });
     const cards = await h.as(admin).get('/admin/community-service/award-cards');
     const data = (cards.body as AwardCardsRes).data;
     const list = (data?.cards ?? data) as AwardCard[];
@@ -853,7 +853,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   it('criteria metadata for both versions is complete', () => {
     expect(NPE_CRITERIA).toHaveLength(8);
-    expect(npeCriteriaFor('NPE-1.2').map((c) => c.weight)).toEqual([
+    expect(npeCriteriaFor('NPE-1.3').map((c) => c.weight)).toEqual([
       22, 13, 9, 9, 9, 9, 9, 10,
     ]);
     expect(npeCriteriaFor('NPE-1.1').map((c) => c.weight)).toEqual([

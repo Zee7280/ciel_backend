@@ -173,6 +173,39 @@ describe('validateReportSectionsForSubmit', () => {
     ).toEqual([]);
   });
 
+  it('"What did it make possible?" is one clear line, not a single word; a numeric amount still counts as an amount', () => {
+    const entry = {
+      type: 'Educational / Learning Materials',
+      amount: 50,
+      unit: 'Books / Materials',
+      sources: ['Student Team'],
+      verification: ['Receipt / Invoice'],
+    };
+    const oneWord = {
+      section6: {
+        use_resources: 'yes',
+        resources: [{ ...entry, purpose: 'Paint' }],
+      },
+    };
+    const oneWordIssues = validateReportSectionsForSubmit(
+      oneWord as never,
+    ).filter((i) => i.section === 6);
+    expect(oneWordIssues.map((i) => i.field)).toEqual(['resources.0.purpose']);
+    expect(oneWordIssues[0].message).toMatch(/one clear line/);
+
+    const line = {
+      section6: {
+        use_resources: 'yes',
+        resources: [{ ...entry, purpose: 'Paint for both classroom walls' }],
+      },
+    };
+    expect(
+      validateReportSectionsForSubmit(line as never).filter(
+        (i) => i.section === 6,
+      ),
+    ).toEqual([]);
+  });
+
   it('team time / self-funded resources need no contributor details; a phone without a country code is refused', () => {
     const inKind = {
       section6: {
@@ -183,7 +216,7 @@ describe('validateReportSectionsForSubmit', () => {
             amount: '20',
             unit: 'Hours',
             sources: ['Student Team'],
-            purpose: 'Facilitation',
+            purpose: 'Facilitation of the training sessions',
             verification: ['Timesheet / Volunteer Log'],
           },
           {
@@ -191,7 +224,7 @@ describe('validateReportSectionsForSubmit', () => {
             amount: '3000',
             unit: 'PKR',
             sources: ['Self-funded'],
-            purpose: 'Paint',
+            purpose: 'Paint for the classroom walls',
             verification: ['Receipt / Invoice'],
             contributor_phone_code: '',
             contributor_phone: '3001234567',

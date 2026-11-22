@@ -121,6 +121,8 @@ function fullSections(signature = 'Jane Student') {
         'Households report improved water quality and fewer stomach illnesses since the filters were installed, with several families noting that children miss fewer school days and that water now looks and tastes noticeably cleaner than before the project began, according to informal household feedback collected during follow-up visits.',
       challenges:
         'Replacement parts were hard to find locally in the first week, and the team had to travel to a neighboring town to source the correct filter cartridges before installation could continue.',
+      story_because:
+        'Follow-up household visits and the partner register showed fewer reported stomach illnesses after the filters went in.',
       measurable_outcomes: [
         {
           outcome_area: 'Health',

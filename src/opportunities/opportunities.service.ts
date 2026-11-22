@@ -2324,6 +2324,10 @@ export class OpportunitiesService {
     // Keep unfinished creator drafts out of the closed/rejected bucket. normalizeOpportunityStatus
     // maps the raw word "draft" to "closed", which hid them from every Drafts tab.
     if (String(opp.status || '').toLowerCase() === 'draft') return 'draft';
+    // Admin "Close" (setStatus) keeps the approval trail (workflowStage live, admin_approved), so
+    // the raw lifecycle status must win here or a closed listing keeps reading as "live" and never
+    // reaches any Closed tab.
+    if (String(opp.status || '').toLowerCase() === 'closed') return 'closed';
     if (opp.workflowStage === WORKFLOW_STAGE.LIVE && opp.admin_approved)
       return 'live';
     if (

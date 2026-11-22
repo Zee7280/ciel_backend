@@ -85,6 +85,8 @@ describe('University binding (e2e)', () => {
         opportunityId: sharedOpp,
         project_id: sharedOpp,
         status: 'submitted',
+        // Package release rule: university / delegated faculty open it only after CIEL PK accepts.
+        admin_status: 'approved',
         reportSubmittedAt: new Date(),
         submission_date: new Date(),
         section1: { team_lead: { name: key } },

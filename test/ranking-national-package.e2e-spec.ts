@@ -403,7 +403,7 @@ describe('National ranking sends the complete package to the AI (real app + real
     );
     const rows = res.body.data.rows;
     expect(rows.every((r) => r.status === 'Ranked')).toBe(true);
-    expect(res.body.data.rubricVersion).toBe('NPE-1.2');
+    expect(res.body.data.rubricVersion).toBe('NPE-1.3');
   });
 
   it('each request carries all four parts of the package: flashcard, 9 report sections, system analysis, evidence manifest', async () => {
@@ -563,7 +563,7 @@ describe('National ranking sends the complete package to the AI (real app + real
     expect(received[received.length - 1].projectId).toBe(ids['Delta']);
   });
 
-  it('reads made under the older NPE-1.1 rubric are re-scored under NPE-1.2, never re-read (no AI cost on a rubric upgrade)', async () => {
+  it('reads made under the older NPE-1.1 rubric are re-scored under NPE-1.3, never re-read (no AI cost on a rubric upgrade)', async () => {
     const pk = await packages();
     const legacy = await h.ds.getRepository(NpeRankingRun).save(
       h.ds.getRepository(NpeRankingRun).create({
@@ -610,9 +610,9 @@ describe('National ranking sends the complete package to the AI (real app + real
     const res = await analyzeAll();
     expect(res.status).toBe(201);
     expect(aiCalls).toBe(0); // every package was already read from the complete package; the judgment does not depend on the weights
-    expect(res.body.data.rubricVersion).toBe('NPE-1.2');
+    expect(res.body.data.rubricVersion).toBe('NPE-1.3');
     const alpha = res.body.data.rows.find((r) => r.id === ids['Alpha'])!;
-    const expected = npeCalculate(85, criteria, 'NPE-1.2').total;
+    const expected = npeCalculate(85, criteria, 'NPE-1.3').total;
     expect(alpha.score).toBe(expected);
     expect(alpha.score).not.toBe(npeCalculate(85, criteria, 'NPE-1.1').total);
   });

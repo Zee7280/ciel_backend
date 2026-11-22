@@ -3552,10 +3552,8 @@ export class StudentReportsService {
       if (faculty?.id && this.notificationsService) {
         await this.notificationsService.createNotification(faculty.id, {
           type: 'approval',
-          title: input.resubmitted
-            ? 'Report resubmitted for your review'
-            : 'Report submitted for your review',
-          message: `${input.studentName} ${input.resubmitted ? 'resubmitted' : 'submitted'} the impact report for "${input.projectTitle}". Open Reports to approve it or return it for revision.`,
+          title: input.resubmitted ? 'Report resubmitted' : 'Report submitted',
+          message: `${input.studentName} ${input.resubmitted ? 'resubmitted' : 'submitted'} the impact report for "${input.projectTitle}". CIEL PK Admin reviews it; the approved package opens in your Reports once Admin accepts it.`,
         });
       }
     } catch (error) {

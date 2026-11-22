@@ -79,14 +79,25 @@ export function resolvePartnerContact(
   const sup = rec(opportunity.supervision);
   const org = rec(opportunity.organization);
 
+  // The partner / NGO / University request form mirrors the EXECUTING ORGANIZATION's own contact
+  // into `supervision` (role "Executing organization — official contact"). Only then is
+  // `supervision.contact` / `supervision.whatsapp_e164` the organisation's contact; with any other
+  // role (or none) that block names a faculty supervisor, whose details must never be shown as
+  // the organisation's contact to every signed-in viewer.
+  const supIsExecutingOrgContact = text(sup.role)
+    .toLowerCase()
+    .startsWith('executing organization');
+
   const contactEmail =
     email(exec.official_email) ||
     email(exec.officialEmail) ||
-    email(sup.contact) ||
+    (supIsExecutingOrgContact ? email(sup.contact) : '') ||
     email(org.contactEmail) ||
     email(creator?.email);
   const whatsapp =
-    text(sup.whatsapp_e164) || text(org.contactPhone) || text(creator?.phone);
+    (supIsExecutingOrgContact ? text(sup.whatsapp_e164) : '') ||
+    text(org.contactPhone) ||
+    text(creator?.phone);
   if (!contactEmail && !whatsapp) return null;
 
   return {

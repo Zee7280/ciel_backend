@@ -26,7 +26,7 @@ function makeService(fail = false) {
 }
 
 describe('sendFacultyReportSubmittedForReview — the supervisor hears that a report is waiting', () => {
-  it('names the student and project and links straight to the faculty review page', async () => {
+  it('names the student and project and links to the faculty report status list (the package stays locked until CIEL PK Admin accepts)', async () => {
     const { service, sent } = makeService();
     await service.sendFacultyReportSubmittedForReview({
       to: 'zubair@uni.edu',
@@ -39,16 +39,18 @@ describe('sendFacultyReportSubmittedForReview — the supervisor hears that a re
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('zubair@uni.edu');
     expect(sent[0].subject).toBe(
-      'Report submitted for your review: TEST – Campus Clean-Up and Recycling Drive',
+      'Report submitted: TEST – Campus Clean-Up and Recycling Drive',
     );
     const html = htmlOf(sent[0]);
     expect(html).toContain('Dear Zubair Faculty');
     expect(html).toContain('<strong>student 1</strong> has submitted');
     expect(html).toContain('(CS-2026-997D)');
     expect(html).toContain(
-      'https://cielpk.com/dashboard/faculty/reports/rep-77',
+      'https://cielpk.com/dashboard/faculty/reports?tab=waiting&report=rep-77',
     );
-    expect(html).toContain('Review the report');
+    expect(html).toContain('View report status');
+    expect(html).toContain('CIEL PK Admin reviews the report');
+    expect(html).not.toContain('approve it or return it for revision');
   });
 
   it('a resubmission says so; a mail failure is thrown to the caller (who logs it)', async () => {
@@ -60,7 +62,7 @@ describe('sendFacultyReportSubmittedForReview — the supervisor hears that a re
       reportId: 'rep-77',
       resubmitted: true,
     });
-    expect(sent[0].subject).toBe('Resubmitted for your review: Clean-Up');
+    expect(sent[0].subject).toBe('Report resubmitted: Clean-Up');
     expect(htmlOf(sent[0])).toContain('has resubmitted');
     expect(htmlOf(sent[0])).toContain('Dear Faculty Member');
 

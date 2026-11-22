@@ -10,7 +10,10 @@ describe('opportunity partner contact', () => {
       name: 'Green Pakistan Trust',
       official_email: 'Info@GreenPK.org ',
     },
-    supervision: { whatsapp_e164: '+923001234567' },
+    supervision: {
+      role: 'Executing organization — official contact',
+      whatsapp_e164: '+923001234567',
+    },
     organization: {
       name: 'Profile Org',
       contactEmail: 'profile@org.pk',
@@ -83,6 +86,29 @@ describe('opportunity partner contact', () => {
     ).toEqual({
       organization_name: null,
       email: 'owner@x.pk',
+      whatsapp: '+92300000000',
+    });
+  });
+
+  it('never shows a faculty supervisor named in `supervision` as the organisation contact', () => {
+    // Without the executing-org role, supervision.contact / whatsapp_e164 name a faculty member.
+    expect(
+      resolvePartnerContact(
+        {
+          organizationId: 'org-1',
+          executing_organization: { name: 'Green Pakistan Trust' },
+          supervision: {
+            supervisor_name: 'Dr Named',
+            contact: 'faculty@uni.edu.pk',
+            whatsapp_e164: '+923009998877',
+          },
+          organization: { name: 'Profile Org', contactEmail: 'profile@org.pk' },
+        },
+        { role: 'ngo', email: 'owner@x.pk', phone: '+92300000000' },
+      ),
+    ).toEqual({
+      organization_name: 'Green Pakistan Trust',
+      email: 'profile@org.pk',
       whatsapp: '+92300000000',
     });
   });

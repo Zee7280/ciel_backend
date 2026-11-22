@@ -276,7 +276,10 @@ describe('StudentsService impact history', () => {
         name: 'Green Pakistan Trust',
         official_email: 'info@greenpk.org',
       },
-      supervision: { whatsapp_e164: '+923001234567' },
+      supervision: {
+        role: 'Executing organization — official contact',
+        whatsapp_e164: '+923001234567',
+      },
     };
     const build = (row: Record<string, unknown>, role: string) =>
       makeService({

@@ -98,6 +98,8 @@ function fullSections(followup: Rec): Rec {
       },
     },
     section5: {
+      story_because:
+        'The school register and a follow-up visit by the team confirmed attendance recovered after the retrofit.',
       observed_change:
         'Afternoon classes resumed in all six rooms within a week of the retrofit, and the head teacher reports that attendance in the primary block recovered to its pre-summer level by the end of the month according to the register, with no heat-related early closures recorded since the fans were installed.',
       challenges:

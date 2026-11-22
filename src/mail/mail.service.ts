@@ -2742,10 +2742,12 @@ ${instructionsHtml}
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const reviewHref = this.buildFrontendLink(
-      `/dashboard/faculty/reports/${encodeURIComponent(input.reportId)}`,
-      {},
-    );
+    // Faculty review is read-only and the package stays locked until CIEL PK Admin accepts the
+    // report, so the link lands on the status list ("Waiting for CIEL PK"), not the locked package.
+    const reviewHref = this.buildFrontendLink('/dashboard/faculty/reports', {
+      tab: 'waiting',
+      report: input.reportId,
+    });
     const dear = this.escHtmlPlain(
       input.facultyName?.trim() || 'Faculty Member',
     );
@@ -2758,10 +2760,10 @@ ${instructionsHtml}
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
         <p style="margin: 0 0 16px 0;">Dear ${dear},</p>
-        <p style="margin: 0 0 16px 0;"><strong>${studentEsc}</strong> has ${verb} the Community Service impact report for <strong>${titleEsc}</strong>${codeEsc} on CIEL PK. It is now waiting for your review as the faculty supervisor.</p>
-        <p style="margin: 0 0 16px 0;">Please open the report, check the participation record, evidence and outcomes, and approve it or return it for revision. CIEL PK completes the final verification only after your decision.</p>
+        <p style="margin: 0 0 16px 0;"><strong>${studentEsc}</strong> has ${verb} the Community Service impact report for <strong>${titleEsc}</strong>${codeEsc} on CIEL PK. You are named as the faculty supervisor.</p>
+        <p style="margin: 0 0 16px 0;">CIEL PK Admin reviews the report. Once Admin accepts it, the approved package (flashcard, detailed report and permitted evidence) opens in your Reports, and you will be notified. Until then the report shows as a status row only.</p>
         <div style="text-align: center; margin: 28px 0;">
-          <a href="${reviewHref}" style="background-color: #0e7d74; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Review the report</a>
+          <a href="${reviewHref}" style="background-color: #0e7d74; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">View report status</a>
         </div>
         <p style="font-size: 13px; color: #475569; margin: 0 0 16px 0;">Sign in with your faculty account. The link opens this report inside your dashboard.</p>
         <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
@@ -2771,7 +2773,7 @@ ${instructionsHtml}
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: `${input.resubmitted ? 'Resubmitted' : 'Report submitted'} for your review: ${input.projectTitle}`,
+        subject: `${input.resubmitted ? 'Report resubmitted' : 'Report submitted'}: ${input.projectTitle}`,
         html,
       });
       this.logger.log(`Faculty report-submitted email sent to ${input.to}`);

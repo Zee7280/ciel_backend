@@ -21,7 +21,8 @@ export function isApprovedLiveStudentOpportunity(opp: Opportunity): boolean {
  */
 export function isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
   if (opp.admin_hidden === true) return false;
-  if (String(opp.status || '').toLowerCase() === 'draft') return false;
+  const rawStatus = String(opp.status || '').toLowerCase();
+  if (rawStatus === 'draft' || rawStatus === 'closed') return false;
   if (opp.isStudentCreated) {
     return isApprovedLiveStudentOpportunity(opp);
   }

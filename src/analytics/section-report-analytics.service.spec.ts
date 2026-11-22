@@ -158,6 +158,7 @@ describe('SectionReportAnalyticsService metrics', () => {
             privacy_respected: true,
           },
           partner_verification: true,
+          public_share_permission: true,
         },
       }),
     ];

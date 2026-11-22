@@ -29,12 +29,15 @@ export function isReportSubmittedStatus(
   status: string | null | undefined,
   reportSubmittedAt?: unknown,
 ): boolean {
+  const normalized = String(status ?? '')
+    .trim()
+    .toLowerCase();
+  // A report sent back for revision is with the student again: the earlier submit stamp is kept
+  // for the audit trail, but progress and "complete your report" reminders must treat it as open
+  // work until the student resubmits (which re-stamps it).
+  if (normalized === 'revision') return false;
   if (reportSubmittedAt) return true;
-  return !['draft', 'continue', ''].includes(
-    String(status ?? '')
-      .trim()
-      .toLowerCase(),
-  );
+  return !['draft', 'continue', ''].includes(normalized);
 }
 
 /**

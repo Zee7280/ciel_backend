@@ -20,6 +20,9 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** Section 5 (Resources) 6.2 — "What did it make possible?" must be a line, not a word. */
+export const RESOURCE_PURPOSE_MIN_WORDS = 3;
+
 /** Section 5 (Resources) accountability — same rule as the student form (resourceContributors.ts). */
 const INTERNAL_RESOURCE_SOURCES = new Set(['Student Team', 'Self-funded']);
 
@@ -1164,7 +1167,13 @@ export function validateReportSectionsForSubmit(report: {
             message: 'Choose the resource type',
           });
         }
-        if (!stringField(res.amount).trim()) {
+        // The form stores the amount as typed (a string); older / imported rows may hold a
+        // number. Both are an amount — only a blank is not.
+        const amountText =
+          typeof res.amount === 'number' && Number.isFinite(res.amount)
+            ? String(res.amount)
+            : stringField(res.amount);
+        if (!amountText.trim()) {
           issues.push({
             section: 6,
             field: `resources.${index}.amount`,
@@ -1192,11 +1201,19 @@ export function validateReportSectionsForSubmit(report: {
             message: 'Choose at least one verification method',
           });
         }
+        // "What did it make possible?" is one clear line linking the resource to delivery: a
+        // single word ("Paint") says nothing a reviewer can check. Mirrors the wizard rule.
         if (!stringField(res.purpose).trim()) {
           issues.push({
             section: 6,
             field: `resources.${index}.purpose`,
             message: 'Say what this resource made possible',
+          });
+        } else if (countWords(res.purpose) < RESOURCE_PURPOSE_MIN_WORDS) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.purpose`,
+            message: `What did it make possible? — write one clear line (at least ${RESOURCE_PURPOSE_MIN_WORDS} words)`,
           });
         }
         if (

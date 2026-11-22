@@ -4843,6 +4843,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
           official_email: 'info@greenpk.org',
         },
         supervision: {
+          role: 'Executing organization — official contact',
           whatsapp_e164: '+923001234567',
           contact: 'info@greenpk.org',
         },

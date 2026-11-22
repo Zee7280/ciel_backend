@@ -30,6 +30,9 @@ describe('report progress', () => {
     expect(isReportSubmittedStatus('continue')).toBe(false);
     expect(isReportSubmittedStatus('')).toBe(false);
     expect(isReportSubmittedStatus('payment_pending')).toBe(true);
+    // Returned for revision: back with the student even though the first submit was stamped.
+    expect(isReportSubmittedStatus('revision', new Date())).toBe(false);
+    expect(isReportSubmittedStatus('submitted', new Date())).toBe(true);
   });
 
   it('draft rows are reduced to progress-only for non-admin viewers', () => {

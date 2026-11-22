@@ -1017,9 +1017,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           (r) => r.id,
         ),
       ).toContain(rep.id);
-      const open = await h.as(uniUser).get(`/partner/reports/${rep.id}`);
-      expect(open.status).toBe(200);
-      expect((open.body as ReportView).data.viewer_can_review).toBe(false);
+      // Package release rule: the university, like every other stakeholder, sees only the status
+      // row until CIEL PK Admin accepts the report; afterwards it opens read-only.
+      const uniEarly = await h.as(uniUser).get(`/partner/reports/${rep.id}`);
+      expect(uniEarly.status).toBe(403);
+      expect((uniEarly.body as MessageBody).message).toMatch(
+        /after CIEL PK Admin has accepted/,
+      );
       expect(
         (
           await h
@@ -1041,6 +1045,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const host = await h.as(hostNgo).get(`/partner/reports/${rep.id}`);
       expect(host.status).toBe(200);
       expect((host.body as ReportView).data.viewer_can_review).toBe(true);
+      const open = await h.as(uniUser).get(`/partner/reports/${rep.id}`);
+      expect(open.status).toBe(200);
+      expect((open.body as ReportView).data.viewer_can_review).toBe(false);
     });
   });
 
@@ -1243,9 +1250,10 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           partner_status: 'pending',
         }),
       );
-      const uni = await h.as(uniUser).get(`/students/reports/${rep.id}`);
-      expect(uni.status).toBe(200);
-      expect((uni.body as ReportView).data.viewer_can_review).toBe(false);
+      // Package release rule: the university read opens only after CIEL PK Admin accepts.
+      expect(
+        (await h.as(uniUser).get(`/students/reports/${rep.id}`)).status,
+      ).toBe(403);
       expect(
         (await h.as(otherUni).get(`/students/reports/${rep.id}`)).status,
       ).toBe(403);
@@ -1257,6 +1265,12 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const host = await h.as(hostNgo).get(`/students/reports/${rep.id}`);
       expect(host.status).toBe(200);
       expect((host.body as ReportView).data.viewer_can_review).toBe(true);
+      const uni = await h.as(uniUser).get(`/students/reports/${rep.id}`);
+      expect(uni.status).toBe(200);
+      expect((uni.body as ReportView).data.viewer_can_review).toBe(false);
+      expect(
+        (await h.as(otherUni).get(`/students/reports/${rep.id}`)).status,
+      ).toBe(403);
       // a stranger student gets an empty placeholder, never the report
       const strangerRead = await h
         .as(stranger)

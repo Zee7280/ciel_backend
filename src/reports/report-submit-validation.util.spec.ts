@@ -93,9 +93,9 @@ const VALID_CORE_SECTIONS = {
     reflection_moment: 'children choosing books on day one',
     reflection_discipline_help: 'simple data tracking for attendance',
     personal_learning:
-      'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify.',
+      'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify. Working alongside the partner staff also taught me patience, because real change in a household routine takes weeks of follow-up rather than one visit.',
     academic_application:
-      'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time.',
+      'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time and compare them against the baseline readings.',
     competency_scores: WIZARD_COMPETENCY_SCORES,
   },
   section10: {
@@ -649,7 +649,7 @@ describe('validateReportSectionsForSubmit', () => {
     expect(sections.has(9)).toBe(true);
   });
 
-  it('requires each listed partner to have a name and type when has_partners is yes', () => {
+  it('requires each listed partner to have a name, roles and a contribution line; the partner type stays Recommended', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section7: { has_partners: 'yes', partners: [{}] },
@@ -657,8 +657,32 @@ describe('validateReportSectionsForSubmit', () => {
     expect(
       issues.some((i) => i.section === 7 && i.field === 'partners.0.name'),
     ).toBe(true);
+    // The card marks the type "Recommended" (V19 Section 6 asks for roles + contribution), so the
+    // gate must not demand it — the QA sweep found the validator out of step with the form.
     expect(
       issues.some((i) => i.section === 7 && i.field === 'partners.0.type'),
+    ).toBe(false);
+    const contribution = issues.find(
+      (i) => i.section === 7 && i.field === 'partners.0.contribution',
+    );
+    expect(contribution?.message).toMatch(/in one line/);
+    // A chosen "Other" type still has to be spelled out.
+    const other = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section7: {
+        has_partners: 'yes',
+        partners: [
+          {
+            name: 'Local shop',
+            type: '✏️ Other',
+            role: ['Venue'],
+            contribution: ['gave the hall'],
+          },
+        ],
+      },
+    });
+    expect(
+      other.some((i) => i.section === 7 && i.field === 'partners.0.type_other'),
     ).toBe(true);
   });
 
@@ -1010,7 +1034,7 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.filter((i) => i.section === 8)).toEqual([]);
   });
 
-  it('V19 8.2 · the Step 7 caption is optional; a given caption must fit the 10–45 word meter', () => {
+  it('V19 8.2 · the Step 7 caption is optional; a given caption may be short but never over 45 words', () => {
     const blank = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section8: {
@@ -1038,7 +1062,22 @@ describe('validateReportSectionsForSubmit', () => {
     });
     expect(
       short.some((i) => i.section === 8 && i.field === 'description'),
-    ).toBe(true);
+    ).toBe(false);
+    const long = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'yes',
+        evidence_types: ['Attendance sheet'],
+        evidence_files: ['https://cdn.example/sheet.jpg'],
+        description: Array.from({ length: 46 }, (_, i) => `word${i}`).join(' '),
+        media_visible: 'internal',
+        ethical_compliance: WIZARD_ETHICS,
+      },
+    });
+    const issue = long.find(
+      (i) => i.section === 8 && i.field === 'description',
+    );
+    expect(issue?.message).toMatch(/up to 45 words \(46 current\)/);
   });
 
   it('a blank earlier-version outcome row never blocks submit; a row with content keeps its rules; a half-filled V19 result is flagged', () => {
@@ -1307,11 +1346,164 @@ describe('V19 spec audit · structural gates that were missing', () => {
             has_evidence: 'yes',
             evidence_types: ['📋 Attendance sheet'],
             evidence_files: ['https://x/a.jpg'],
-            description: 'too short',
+            description: 'two words',
+          },
+        },
+        8,
+      ),
+    ).not.toContain('description');
+    // V19 8.2 "Optional evidence explanation": no minimum, but never more than 45 words.
+    expect(
+      fields(
+        {
+          section8: {
+            ...base,
+            has_evidence: 'yes',
+            evidence_types: ['📋 Attendance sheet'],
+            evidence_files: ['https://x/a.jpg'],
+            description: Array.from({ length: 50 }, () => 'word').join(' '),
           },
         },
         8,
       ),
     ).toContain('description');
+  });
+});
+
+describe('QA sweep (22 Nov) — validator matches the V19 form', () => {
+  const extraSdg = (goal: number) => ({
+    goal_number: goal,
+    target_id: `${goal}.1`,
+    indicator_id: `${goal}.1.1`,
+    justification_text:
+      'The project supports this goal through the weekly sessions and the materials handed to the families involved.',
+    status: 'provisional',
+  });
+
+  it('FT-04 · at most two additional SDGs in total — the student primary counts when the opportunity has its own', () => {
+    const base = {
+      ...VALID_CORE_SECTIONS.section3,
+      registered_primary_goal: 4,
+      primary_sdg: {
+        goal_number: 12,
+        target_id: '12.5',
+        indicator_id: '12.5.1',
+      },
+      student_contribution_intent_statement:
+        'During implementation the team reused furniture and paint so that less material went to waste in the classrooms.',
+    };
+    const three = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: { ...base, secondary_sdgs: [extraSdg(11), extraSdg(13)] },
+    });
+    const cap = three.find(
+      (i) => i.section === 3 && i.field === 'secondary_sdgs',
+    );
+    expect(cap?.message).toMatch(/at most 2 in total/);
+    const two = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: { ...base, secondary_sdgs: [extraSdg(11)] },
+    });
+    expect(
+      two.some((i) => i.section === 3 && i.field === 'secondary_sdgs'),
+    ).toBe(false);
+    // No registered primary on the opportunity: the student primary is the report's primary.
+    const ownPrimary = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...base,
+        registered_primary_goal: null,
+        secondary_sdgs: [extraSdg(11), extraSdg(13)],
+      },
+    });
+    expect(
+      ownPrimary.some((i) => i.section === 3 && i.field === 'secondary_sdgs'),
+    ).toBe(false);
+  });
+
+  it('Section 5 · a negative or zero amount is refused; free-text amounts are left to the amount rule', () => {
+    const entry = {
+      type: 'Cash / Funding',
+      unit: 'PKR',
+      sources: ['Student Team'],
+      purpose: 'Paint for both classroom walls',
+      verification: ['Receipt / Invoice'],
+    };
+    const negative = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: {
+        use_resources: 'yes',
+        resources: [{ ...entry, amount: '-1' }],
+      },
+    }).filter((i) => i.section === 6);
+    expect(negative.map((i) => i.message)).toEqual([
+      'Enter an amount greater than 0',
+    ]);
+    const zero = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: { use_resources: 'yes', resources: [{ ...entry, amount: 0 }] },
+    }).filter((i) => i.section === 6);
+    expect(zero.map((i) => i.field)).toEqual(['resources.0.amount']);
+    const fine = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: {
+        use_resources: 'yes',
+        resources: [{ ...entry, amount: '8,000' }],
+      },
+    }).filter((i) => i.section === 6);
+    expect(fine).toEqual([]);
+  });
+
+  it('FT-06 · a mixed-source entry records the student team share, which cannot exceed the total', () => {
+    const mixed = {
+      type: 'Cash / Funding',
+      amount: '8000',
+      unit: 'PKR',
+      sources: ['Student Team', 'Private Sponsor'],
+      purpose: 'Paint and brushes for the classrooms',
+      verification: ['Receipt / Invoice'],
+      contributor_name: 'Ayesha Khan',
+      contributor_email: 'ayesha@example.org',
+      contributor_phone_code: '+92',
+      contributor_phone: '3001234567',
+      evidence_trail: 'Bank transfer receipt and the paint-shop invoice',
+    };
+    const run = (patch: Record<string, unknown>) =>
+      validateReportSectionsForSubmit({
+        ...VALID_CORE_SECTIONS,
+        section6: { use_resources: 'yes', resources: [{ ...mixed, ...patch }] },
+      }).filter((i) => i.section === 6);
+    expect(run({}).map((i) => i.field)).toEqual([
+      'resources.0.student_team_share',
+    ]);
+    expect(run({ student_team_share: '9000' })[0]?.message).toMatch(
+      /cannot exceed the resource total/,
+    );
+    expect(run({ student_team_share: '-5' })[0]?.message).toMatch(/0 or more/);
+    expect(run({ student_team_share: '3000' })).toEqual([]);
+    expect(run({ student_team_share: 0 })).toEqual([]);
+    // A purely outside source needs no share split.
+    expect(
+      run({ sources: ['Private Sponsor'], student_team_share: '' }),
+    ).toEqual([]);
+  });
+
+  it('Section 8 · the reflections are gated on the on-screen ranges (40–100 and 25–70 words)', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section9: {
+        ...VALID_CORE_SECTIONS.section9,
+        personal_learning: Array.from({ length: 30 }, () => 'word').join(' '),
+        academic_application: Array.from({ length: 20 }, () => 'word').join(
+          ' ',
+        ),
+      },
+    }).filter((i) => i.section === 9);
+    expect(
+      issues.find((i) => i.field === 'personal_learning')?.message,
+    ).toMatch(/40–100 words \(30 current\)/);
+    expect(
+      issues.find((i) => i.field === 'academic_application')?.message,
+    ).toMatch(/25–70 words \(20 current\)/);
   });
 });

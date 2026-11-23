@@ -35,6 +35,65 @@ export function isExternalResourceSource(sources: unknown): boolean {
   );
 }
 
+/** V19 5.2 "mixed" source — the student team AND an outside contributor funded the same entry. */
+export function isMixedResourceSource(sources: unknown): boolean {
+  const list = (Array.isArray(sources) ? sources : [])
+    .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    .map((s) => s.trim());
+  return (
+    list.some((s) => INTERNAL_RESOURCE_SOURCES.has(s)) &&
+    list.some((s) => !INTERNAL_RESOURCE_SOURCES.has(s))
+  );
+}
+
+/** "8,000" / 8000 → 8000; null when blank or not a number (older rows may hold free text). */
+export function resourceAmountNumber(value: unknown): number | null {
+  const text = (
+    typeof value === 'number' && Number.isFinite(value)
+      ? String(value)
+      : stringField(value)
+  )
+    .replace(/,/g, '')
+    .trim();
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** V19 3.2 — at most two additional goals in total, however the form groups them. */
+export const MAX_ADDITIONAL_SDGS = 2;
+
+/**
+ * Additional (student-added) goals on a report: every secondary alignment, plus the student's own
+ * primary mapping when the opportunity already carries a registered primary goal (the wizard seeds
+ * `registered_primary_goal`; without it the student primary is the report's primary, not an extra).
+ * Mirrors ciel_frontend report/utils/sdgAdditionalCap.ts.
+ */
+export function additionalStudentSdgCount(
+  section3: Record<string, unknown>,
+): number {
+  const secondaries = Array.isArray(section3.secondary_sdgs)
+    ? section3.secondary_sdgs.length
+    : 0;
+  const primary =
+    section3.primary_sdg && typeof section3.primary_sdg === 'object'
+      ? (section3.primary_sdg as Record<string, unknown>)
+      : {};
+  const goal = stringifyLoose(primary.goal_number ?? '').trim();
+  if (!goal) return secondaries;
+  const registeredPrimary = Number(section3.registered_primary_goal);
+  if (!(registeredPrimary >= 1)) return secondaries;
+  if (goal === String(registeredPrimary)) return secondaries;
+  const registered =
+    section3.registered_secondary_contributions &&
+    typeof section3.registered_secondary_contributions === 'object' &&
+    !Array.isArray(section3.registered_secondary_contributions)
+      ? (section3.registered_secondary_contributions as Record<string, unknown>)
+      : {};
+  if (goal in registered) return secondaries;
+  return secondaries + 1;
+}
+
 function contributorPhoneLooksValid(code: unknown, number: unknown): boolean {
   const digits = stringField(number).replace(/\D/g, '').replace(/^0+/, '');
   if (!digits) return false;
@@ -97,7 +156,11 @@ const FIELD_WORD_POLICY: Record<string, { min: number; max: number }> = {
   description: { min: 15, max: 60 },
   measurement_explanation: { min: 10, max: 80 },
   overlap_note: { min: 10, max: 80 },
-  evidence_caption: { min: 10, max: 45 },
+  // V19 8.2 "Optional evidence explanation": no minimum, up to 45 words.
+  evidence_caption: { min: 0, max: 45 },
+  // V19 Section 8 — the reflections are scored on these ranges (the UI meters say the same).
+  personal_learning: { min: 40, max: 100 },
+  academic_application: { min: 25, max: 70 },
 };
 
 function countWords(value: unknown): number {
@@ -125,10 +188,11 @@ function checkWordRange(
   };
   const n = countWords(text);
   if (n < min || n > max) {
+    const range = min === 0 ? `up to ${max} words` : `${min}–${max} words`;
     issues.push({
       section,
       field,
-      message: `${label} must be ${min}–${max} words (${n} current)`,
+      message: `${label} must be ${range} (${n} current)`,
     });
   }
 }
@@ -602,6 +666,16 @@ function validateCoreSectionsPresence(report: {
       );
     }
   });
+  // V19 3.2 — "you may select up to two" additional goals in total; the student's own primary
+  // mapping counts as one when the opportunity already has a registered primary goal.
+  const extraGoals = additionalStudentSdgCount(section3);
+  if (extraGoals > MAX_ADDITIONAL_SDGS) {
+    issues.push({
+      section: 3,
+      field: 'secondary_sdgs',
+      message: `Additional SDGs: at most ${MAX_ADDITIONAL_SDGS} in total (your own primary mapping counts as one) — remove ${extraGoals - MAX_ADDITIONAL_SDGS}`,
+    });
+  }
   // V19 item 17 — one contribution statement per SDG registered on the opportunity. The wizard
   // seeds a key per registered secondary SDG; a key left blank means the student skipped it.
   // Older reports without the map are untouched (nothing to check).
@@ -977,13 +1051,8 @@ function validateCoreSectionsPresence(report: {
             message: `Partner ${index + 1}: organization name is required`,
           });
         }
-        if (!partner.type) {
-          issues.push({
-            section: 7,
-            field: `partners.${index}.type`,
-            message: `Partner ${index + 1}: partner type is required`,
-          });
-        }
+        // The partner type is "Recommended" on the card (V19 Section 6 asks for roles and the
+        // contribution line); only a chosen "Other" must be spelled out.
         if (
           (partner.type === 'Others (please specify)' ||
             partner.type === '✏️ Other') &&
@@ -1006,7 +1075,7 @@ function validateCoreSectionsPresence(report: {
           issues.push({
             section: 7,
             field: `partners.${index}.contribution`,
-            message: `Partner ${index + 1}: at least one contribution is required`,
+            message: `Partner ${index + 1}: say what this partner contributed, in one line`,
           });
         }
       });
@@ -1193,11 +1262,19 @@ export function validateReportSectionsForSubmit(report: {
           typeof res.amount === 'number' && Number.isFinite(res.amount)
             ? String(res.amount)
             : stringField(res.amount);
+        const amountNumber = resourceAmountNumber(res.amount);
         if (!amountText.trim()) {
           issues.push({
             section: 6,
             field: `resources.${index}.amount`,
             message: 'Enter the amount or quantity',
+          });
+        } else if (amountNumber !== null && amountNumber <= 0) {
+          // A negative or zero quantity is not a resource (mirrors the wizard rule).
+          issues.push({
+            section: 6,
+            field: `resources.${index}.amount`,
+            message: 'Enter an amount greater than 0',
           });
         }
         if (!stringField(res.unit).trim()) {
@@ -1274,6 +1351,35 @@ export function validateReportSectionsForSubmit(report: {
         // Accountability: a contribution from outside the team names its contributor and
         // carries an evidence trail (mirrors the student form).
         const external = isExternalResourceSource(sources);
+        // V19 5.2 mixed source: the student team's share is recorded in the same unit and the
+        // contributor's share is the remainder, so the two always reconcile to the total.
+        if (isMixedResourceSource(sources)) {
+          const shareText =
+            typeof res.student_team_share === 'number'
+              ? String(res.student_team_share)
+              : stringField(res.student_team_share);
+          const share = resourceAmountNumber(res.student_team_share);
+          if (!shareText.trim()) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.student_team_share`,
+              message:
+                "Record the student team's share in the same unit (enter 0 if none)",
+            });
+          } else if (share === null || share < 0) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.student_team_share`,
+              message: "The student team's share must be a number of 0 or more",
+            });
+          } else if (amountNumber !== null && share > amountNumber) {
+            issues.push({
+              section: 6,
+              field: `resources.${index}.student_team_share`,
+              message: `The student team's share (${share}) cannot exceed the resource total (${amountNumber})`,
+            });
+          }
+        }
         if (!contributorEmailLooksValid(res.contributor_email)) {
           issues.push({
             section: 6,
@@ -1375,8 +1481,8 @@ export function validateReportSectionsForSubmit(report: {
         message: 'Say what kind of document this is',
       });
     }
-    // The caption is optional (V19 8.2 "What does my/our evidence show? (Optional)"); only a
-    // caption that is given has to respect the 10–45 word meter — same as the wizard.
+    // The caption is optional (V19 8.2 "Optional evidence explanation"); a caption that is given
+    // may be short but never longer than 45 words — same as the wizard.
     if (stringField(section8.description).trim()) {
       checkWordRange(
         issues,

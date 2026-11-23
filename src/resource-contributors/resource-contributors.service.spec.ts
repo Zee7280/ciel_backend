@@ -150,6 +150,36 @@ const report = {
 };
 
 describe('ResourceContributorsService — appreciation loop for Section 5 contributors', () => {
+  it('FT-06 · a mixed-source entry thanks the contributor for their share, not the whole total', async () => {
+    const mixedReport = {
+      ...report,
+      section6: {
+        use_resources: 'yes',
+        resources: [
+          {
+            type: 'Cash / Funding',
+            amount: '8,000',
+            student_team_share: '3000',
+            unit: 'PKR',
+            sources: ['Student Team', 'Private Sponsor'],
+            purpose: 'Paint and brushes',
+            verification: ['Receipt / Invoice'],
+            contributor_name: 'Ayesha Khan',
+            contributor_email: 'ayesha@example.org',
+            contributor_phone_code: '+92',
+            contributor_phone: '300 1234567',
+            evidence_trail: 'Bank transfer receipt',
+          },
+        ],
+      },
+    };
+    const { service, mail } = build({ report: mixedReport, users: [] });
+    const result = await service.acknowledgeReport('rep-1');
+    expect(result).toEqual({ sent: 1, already: 0, skipped: 0, failed: 0 });
+    const sent = mail.sendResourceContributorAppreciation.mock.calls[0][0];
+    expect(sent.resourceLine).toBe('5000 PKR · Cash / Funding');
+  });
+
   it('thanks every external contributor with an email, exactly once, and links a CIEL account by email', async () => {
     const { service, rows, mail, notifications } = build({
       report,

@@ -90,8 +90,9 @@ function report(overrides: Record<string, unknown> = {}) {
       reflection_biggest_learning: 'listening',
       reflection_moment: 'day one',
       reflection_discipline_help: 'data tracking',
-      personal_learning: words(25),
-      academic_application: words(25),
+      // V19 Section 8 ranges: 40–100 and 25–70 words.
+      personal_learning: words(45),
+      academic_application: words(30),
       competency_scores: SCORES,
     },
     section10: {

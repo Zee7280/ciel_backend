@@ -81,6 +81,11 @@ function pickString(value: unknown): string {
   return '';
 }
 
+/** "8,000" → "8000": the wizard's amount boxes are free text and students type thousands separators. */
+function stripThousands(value: unknown): unknown {
+  return typeof value === 'string' ? value.replace(/,/g, '') : value;
+}
+
 function pickNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
@@ -719,7 +724,9 @@ function mapSection6(
       resource_id: `RES-${String(index + 1).padStart(3, '0')}`,
       resource_type: pickString(row.type),
       source: asArray(row.sources).join(', ') || pickString(row.source_other),
-      amount: pickNumber(row.amount),
+      amount: pickNumber(stripThousands(row.amount)),
+      // V19 5.2 mixed source (student team + outside contributor): the split in the same unit.
+      student_team_share: pickNumber(stripThousands(row.student_team_share)),
       currency: pickString(row.unit) || 'PKR',
       description: pickString(row.purpose),
       evidence_file_ids: asArray(section6.evidence_files)

@@ -135,9 +135,9 @@ function fullSections(followup: Rec): Rec {
       reflection_moment: 'lights on',
       reflection_discipline_help: 'load calculations',
       personal_learning:
-        'I learned to plan technical work around a school timetable and to document each step so staff could maintain the fittings afterwards.',
+        'I learned to plan technical work around a school timetable and to document each step so staff could maintain the fittings afterwards. Explaining the wiring plan to teachers who had no technical background also taught me to simplify without hiding the safety points that mattered most.',
       academic_application:
-        'Circuit analysis and load calculations from coursework were applied directly to the audit and to choosing fittings the school could afford.',
+        'Circuit analysis and load calculations from coursework were applied directly to the audit and to choosing fittings the school could afford, and the safety checks followed the standards taught in our laboratory sessions.',
       competency_scores: COMPETENCY,
     },
     section10: {

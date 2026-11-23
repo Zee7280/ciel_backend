@@ -12,7 +12,10 @@ import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { buildImpactVerifyUrl } from '../reports/certificate-verification-code.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
-import { isExternalResourceSource } from '../reports/report-submit-validation.util';
+import {
+  isExternalResourceSource,
+  isMixedResourceSource,
+} from '../reports/report-submit-validation.util';
 import { User } from '../users/entities/user.entity';
 import {
   ContributionSnapshot,
@@ -38,6 +41,7 @@ type LooseResource = {
   type?: unknown;
   type_other?: unknown;
   amount?: unknown;
+  student_team_share?: unknown;
   unit?: unknown;
   unit_other?: unknown;
   source?: unknown;
@@ -52,6 +56,26 @@ type LooseResource = {
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Contributor's share of a resource: the total minus the student team's share on a mixed entry. */
+function contributorShareText(res: LooseResource): string {
+  const totalText = str(res.amount).replace(/,/g, '').trim();
+  const shareRaw = str(res.student_team_share).replace(/,/g, '').trim();
+  const total = Number(totalText);
+  const share = Number(shareRaw);
+  if (
+    isMixedResourceSource(res.sources ?? res.source) &&
+    totalText !== '' &&
+    shareRaw !== '' &&
+    Number.isFinite(total) &&
+    Number.isFinite(share) &&
+    share >= 0 &&
+    share <= total
+  ) {
+    return String(Number((total - share).toFixed(6)));
+  }
+  return str(res.amount).trim();
+}
 
 function str(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -149,7 +173,9 @@ export class ResourceContributorsService {
       opportunity_id: str(report.opportunityId) || null,
       lead_name: str(report.student?.name) || 'the student team lead',
       resource_type: str(res.type_other) || str(res.type),
-      amount: str(res.amount),
+      // A mixed-source entry (student team + this contributor) credits the contributor with their
+      // share only — the remainder after the student team's share — never the whole total.
+      amount: contributorShareText(res),
       unit: str(res.unit_other) || str(res.unit),
       purpose: str(res.purpose),
       sources: [

@@ -152,9 +152,9 @@ function fullSections(signature = 'Jane Student') {
       reflection_moment: 'children choosing books on day one',
       reflection_discipline_help: 'simple data tracking for attendance',
       personal_learning:
-        'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify.',
+        'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify. Working alongside the partner staff also taught me patience, because real change in a household routine takes weeks of follow-up rather than one visit.',
       academic_application:
-        'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time.',
+        'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time and compare them against the baseline readings.',
       competency_scores: COMPETENCY,
     },
     section10: {

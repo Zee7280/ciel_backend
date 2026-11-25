@@ -4789,7 +4789,9 @@ export class OpportunitiesService {
         // instead of an empty mailto: — same contact resolution used everywhere else on this entity.
         faculty_contact_name: facultyName,
         faculty_contact_email: facultyEmail,
-        faculty_contact_phone: reviewerPhones(opp).faculty_contact_phone,
+        // A faculty supervisor's number is CIEL PK admin only (admin approval queue); the student
+        // reminds faculty by email.
+        faculty_contact_phone: null,
         partner_contact_name: partnerName,
         partner_contact_email: partnerEmail,
         partner_contact_phone: reviewerPhones(opp).partner_contact_phone,

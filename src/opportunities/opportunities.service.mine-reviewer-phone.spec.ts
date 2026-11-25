@@ -136,3 +136,50 @@ describe('findMineForStudent — reviewer WhatsApp number fallback', () => {
     warn.mockRestore();
   });
 });
+
+describe('admin approval queue — CIEL PK can WhatsApp the faculty and partner reviewers', () => {
+  it('each row carries the faculty (account fallback) and partner (saved on the opportunity) numbers', async () => {
+    const { service } = makeHarness(
+      [],
+      [
+        {
+          email: 'fatima.khalid@uni.edu',
+          countryCode: '+92',
+          phone: '03001234567',
+        },
+      ],
+    );
+    // The admin queue also counts seats (participation repo) and loads the creators (users repo).
+    const internals = service as unknown as {
+      participationRepository: Record<string, unknown>;
+      usersRepository: Record<string, unknown>;
+      mapOpportunitiesForAdminQueue: (
+        opps: Partial<Opportunity>[],
+      ) => Promise<Array<Record<string, unknown>>>;
+    };
+    internals.participationRepository.createQueryBuilder = jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    }));
+    internals.usersRepository.find = jest.fn().mockResolvedValue([]);
+
+    const rows = await internals.mapOpportunitiesForAdminQueue([
+      studentOpp({
+        status: 'pending_partner',
+        requiresPartnerApproval: true,
+        supervision: {
+          supervisor_name: 'FATIMA KHALID',
+          contact: 'fatima.khalid@uni.edu',
+          role: 'Faculty supervisor',
+          partner_phone: '+92 340 5497821',
+        },
+      }),
+    ]);
+    expect(rows[0].faculty_contact_phone).toBe('+9203001234567');
+    expect(rows[0].partner_contact_phone).toBe('+92 340 5497821');
+  });
+});

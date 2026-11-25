@@ -4645,6 +4645,75 @@ export class OpportunitiesService {
     return out;
   }
 
+  /**
+   * WhatsApp numbers for an opportunity's faculty and partner reviewers: the number saved on the
+   * opportunity first, else the number on the reviewer's own CIEL PK account (the student form never
+   * asks for the faculty's phone, and partner forms may skip it). One account lookup per batch.
+   */
+  private async reviewerContactPhoneResolver(opps: Opportunity[]): Promise<
+    (opp: Opportunity) => {
+      faculty_contact_phone: string | null;
+      partner_contact_phone: string | null;
+    }
+  > {
+    const reviewerEmails = new Set<string>();
+    for (const opp of opps) {
+      const f = this.getFacultyEmailFromOpportunity(opp);
+      const p = this.resolvePartnerEmailFromOpportunity(opp);
+      if (f) reviewerEmails.add(f.toLowerCase());
+      if (p) reviewerEmails.add(p.toLowerCase());
+    }
+    const accountPhoneByEmail = await this.loadAccountPhonesByEmail([
+      ...reviewerEmails,
+    ]);
+    const accountPhone = (email: string | null): string | null =>
+      (email && accountPhoneByEmail.get(email.toLowerCase())) || null;
+    const text = (v: unknown): string =>
+      typeof v === 'string' && v.trim() ? v.trim() : '';
+    // A phone number typed into the "contact person" field is kept as the WhatsApp fallback.
+    const looksLikePhone = (v: unknown): boolean =>
+      typeof v === 'string' &&
+      /^[+\d][\d\s().-]{6,}$/.test(v.trim()) &&
+      v.replace(/\D/g, '').length >= 7;
+
+    return (opp) => {
+      const sup =
+        (opp.supervision as Record<string, unknown> | null | undefined) ??
+        undefined;
+      const po =
+        (opp.partner_organization as
+          | Record<string, unknown>
+          | null
+          | undefined) ?? undefined;
+      const faculty =
+        text(sup?.whatsapp_e164) ||
+        text(sup?.faculty_whatsapp) ||
+        accountPhone(this.getFacultyEmailFromOpportunity(opp));
+      const phoneTypedAsName = [
+        po?.contact_person,
+        po?.contact_person_name,
+        sup?.partner_contact_person,
+      ].find(looksLikePhone);
+      const partner =
+        [
+          sup?.partner_whatsapp_e164,
+          sup?.partner_phone,
+          sup?.external_partner_phone,
+          po?.whatsapp,
+          po?.phone,
+          po?.contact_phone,
+        ]
+          .map(text)
+          .find(Boolean) ||
+        text(phoneTypedAsName) ||
+        accountPhone(this.resolvePartnerEmailFromOpportunity(opp));
+      return {
+        faculty_contact_phone: faculty || null,
+        partner_contact_phone: partner || null,
+      };
+    };
+  }
+
   /** Student dashboard: opportunities this student created — powers "My Drafts" and the
    * Community Service Workspace approval-stage tracker. Optional `status` narrows to one status
    * (e.g. `draft`); omitted returns everything the student has created, newest first. */
@@ -4663,18 +4732,7 @@ export class OpportunitiesService {
 
     // The student form never asks for the faculty's phone (and partner forms may skip it), so the
     // WhatsApp reminder falls back to the number on the reviewer's own CIEL PK account.
-    const reviewerEmails = new Set<string>();
-    for (const opp of rows) {
-      const f = this.getFacultyEmailFromOpportunity(opp);
-      const p = this.resolvePartnerEmailFromOpportunity(opp);
-      if (f) reviewerEmails.add(f.toLowerCase());
-      if (p) reviewerEmails.add(p.toLowerCase());
-    }
-    const accountPhoneByEmail = await this.loadAccountPhonesByEmail([
-      ...reviewerEmails,
-    ]);
-    const accountPhone = (email: string | null): string | null =>
-      (email && accountPhoneByEmail.get(email.toLowerCase())) || null;
+    const reviewerPhones = await this.reviewerContactPhoneResolver(rows);
 
     const items = rows.map((opp) => {
       const sup =
@@ -4717,9 +4775,6 @@ export class OpportunitiesService {
           ? sup.partner_org_name.trim()
           : '') ||
         null;
-      const phoneTypedAsName = nameCandidates.find(
-        (v): v is string => typeof v === 'string' && looksLikePhone(v),
-      );
       return {
         id: opp.id,
         title: opp.title,
@@ -4734,28 +4789,10 @@ export class OpportunitiesService {
         // instead of an empty mailto: — same contact resolution used everywhere else on this entity.
         faculty_contact_name: facultyName,
         faculty_contact_email: facultyEmail,
-        faculty_contact_phone: (() => {
-          const w = sup?.whatsapp_e164;
-          const f = sup?.faculty_whatsapp;
-          if (typeof w === 'string' && w.trim()) return w.trim();
-          if (typeof f === 'string' && f.trim()) return f.trim();
-          return accountPhone(facultyEmail);
-        })(),
+        faculty_contact_phone: reviewerPhones(opp).faculty_contact_phone,
         partner_contact_name: partnerName,
         partner_contact_email: partnerEmail,
-        partner_contact_phone: (() => {
-          const a = sup?.partner_whatsapp_e164;
-          const b = sup?.partner_phone;
-          const c = po?.whatsapp;
-          const d = po?.phone;
-          const e = sup?.external_partner_phone;
-          const f = po?.contact_phone;
-          for (const v of [a, b, e, c, d, f]) {
-            if (typeof v === 'string' && v.trim()) return v.trim();
-          }
-          if (phoneTypedAsName) return phoneTypedAsName.trim();
-          return accountPhone(partnerEmail);
-        })(),
+        partner_contact_phone: reviewerPhones(opp).partner_contact_phone,
       };
     });
 
@@ -5814,6 +5851,9 @@ export class OpportunitiesService {
     const creatorById = new Map(creators.map((c) => [c.id, c]));
 
     const listingAux = await this.loadListingSeatsAndFallbacks(opportunities);
+    // CIEL PK reaches a slow faculty / partner reviewer on WhatsApp from the approval card.
+    const reviewerPhones =
+      await this.reviewerContactPhoneResolver(opportunities);
 
     return opportunities.map((opp) => {
       const occupiedSeats = listingAux.seats.get(opp.id) ?? 0;
@@ -5861,6 +5901,7 @@ export class OpportunitiesService {
         ...this.getWorkflowResponseFields(opp),
         flow_status,
         admin_can_approve,
+        ...reviewerPhones(opp),
         is_student_created: opp.isStudentCreated,
         organization: opp.organization || orgFallback,
         creator: creator

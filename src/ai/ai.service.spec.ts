@@ -712,3 +712,63 @@ describe('Section 10 · 9.5 follow-up data and the AI prompts', () => {
     expect(second).toContain('Selected: [not entered]');
   });
 });
+
+describe('AiService — OpenAI 429: short rate limit vs. no credit left', () => {
+  const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+  });
+  afterEach(() => {
+    global.fetch = realFetch;
+    process.env.OPENAI_API_KEY = realKey;
+    jest.useRealTimers();
+  });
+  const draft = (svc: AiService) =>
+    svc.generateOpportunityDraft({ idea: 'Teach basic computer skills' });
+  const body429 = (code: string) =>
+    JSON.stringify({ error: { message: 'limit', type: code, code } });
+
+  it('insufficient_quota: no pointless retry, and the student is told to continue by hand', async () => {
+    const f = jest
+      .fn()
+      .mockResolvedValue(res(429, body429('insufficient_quota')));
+    global.fetch = f as never;
+    const svc = new AiService();
+    const log = jest
+      .spyOn(
+        (svc as unknown as { logger: { error: () => void } }).logger,
+        'error',
+      )
+      .mockImplementation(() => {});
+    const err = (await draft(svc).catch((e: unknown) => e)) as {
+      getStatus: () => number;
+      getResponse: () => { error: string };
+    };
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(err.getStatus()).toBe(503);
+    expect(err.getResponse().error).toMatch(
+      /continue filling the form yourself/,
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/quota exhausted/));
+  });
+
+  it('a short rate limit is still retried and asks the student to wait a minute', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    const f = jest
+      .fn()
+      .mockResolvedValue(res(429, body429('rate_limit_exceeded')));
+    global.fetch = f as never;
+    const p = draft(new AiService()).catch((e: unknown) => e);
+    await jest.advanceTimersByTimeAsync(5000);
+    const err = (await p) as {
+      getStatus: () => number;
+      getResponse: () => { error: string };
+    };
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(err.getStatus()).toBe(429);
+    expect(err.getResponse().error).toBe(
+      'AI limit reached. Please wait a minute and try again.',
+    );
+  });
+});

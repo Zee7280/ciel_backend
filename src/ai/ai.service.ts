@@ -152,8 +152,30 @@ type OpenAiChatResponse = {
       content?: string | Array<{ type?: string; text?: string }> | null;
     };
   }>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string | null; type?: string | null };
 };
+
+/**
+ * OpenAI answers 429 both for a short rate limit (worth a retry) and for an account with no
+ * credit left (`insufficient_quota`: no retry helps until billing is topped up).
+ */
+export function isOpenAiQuotaExhausted(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const e = error as { status?: unknown; code?: unknown };
+  return e.status === 429 && e.code === 'insufficient_quota';
+}
+
+/** What the student sees when the AI provider refused for quota / rate reasons. */
+export function openAiLimitHttpError(
+  error: unknown,
+  rateLimitedMessage: string,
+  quotaMessage = 'The AI service is unavailable right now. Please try again later.',
+): HttpException {
+  if (isOpenAiQuotaExhausted(error)) {
+    return new HttpException({ error: quotaMessage }, 503);
+  }
+  return new HttpException({ error: rateLimitedMessage }, 429);
+}
 
 /** Chat Completions may return a string, an array of parts, or blank content after reasoning. */
 function extractOpenAiMessageText(responseJson: OpenAiChatResponse): string {
@@ -1021,10 +1043,19 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         }
         const err = new Error(
           responseJson.error?.message || `OpenAI error (${res.status})`,
-        ) as Error & { status?: number };
+        ) as Error & { status?: number; code?: string };
         err.status = res.status;
+        err.code =
+          responseJson.error?.code || responseJson.error?.type || undefined;
         lastError = err;
-        const retryable = res.status === 429 || res.status >= 500;
+        if (isOpenAiQuotaExhausted(err)) {
+          this.logger.error(
+            'OpenAI quota exhausted (insufficient_quota): AI features fail until the OpenAI account is topped up.',
+          );
+        }
+        const retryable =
+          (res.status === 429 && !isOpenAiQuotaExhausted(err)) ||
+          res.status >= 500;
         if (!retryable || attempt >= maxAttempts) throw err;
       } catch (e) {
         const err = e as Error & { status?: number; name?: string };
@@ -1033,7 +1064,7 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         const retryable =
           timedOut ||
           err?.status === undefined ||
-          err.status === 429 ||
+          (err.status === 429 && !isOpenAiQuotaExhausted(err)) ||
           (err.status ?? 0) >= 500;
         if (timedOut) {
           const t = new Error(
@@ -2431,9 +2462,10 @@ SECTION_9_SUSTAINABILITY_AND_FOLLOWUP_FOCUS: ${JSON.stringify(input.sustainabili
           ? (error as { status?: unknown }).status
           : undefined;
       if (status === 429) {
-        throw new HttpException(
-          { error: 'AI limit reached. Please wait a minute and try again.' },
-          429,
+        throw openAiLimitHttpError(
+          error,
+          'AI limit reached. Please wait a minute and try again.',
+          'AI drafting is unavailable right now. Please continue filling the form yourself.',
         );
       }
       if (status === 504) {
@@ -2571,10 +2603,7 @@ No evidence originals, filenames, captions or file metadata are attached to this
           ? (error as { status?: unknown }).status
           : undefined;
       if (status === 429) {
-        throw new HttpException(
-          { error: 'AI limit reached. Please wait.' },
-          429,
-        );
+        throw openAiLimitHttpError(error, 'AI limit reached. Please wait.');
       }
       if (status === 503) {
         throw new HttpException(

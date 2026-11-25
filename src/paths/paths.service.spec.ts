@@ -4166,3 +4166,159 @@ describe('PathsService — the supervising teacher receives the student contact 
     expect(call?.select).not.toContain('countryCode');
   });
 });
+
+describe('PathsService — faculty FYP (own record, self-certified)', () => {
+  const makeFacultyFypService = (
+    row: Record<string, unknown>,
+    ownerRole: string,
+  ) => {
+    const rows = [row];
+    const fypRepo = {
+      findOne: jest.fn((opts: { where?: Record<string, unknown> } = {}) =>
+        Promise.resolve(
+          rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+        ),
+      ),
+      save: jest.fn((r: Record<string, unknown>) => Promise.resolve(r)),
+      manager: {
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(
+            fn({
+              getRepository: () => ({
+                findOne: jest.fn(() => Promise.resolve(rows[0])),
+                save: jest.fn((r: Record<string, unknown>) =>
+                  Promise.resolve(r),
+                ),
+              }),
+            }),
+          ),
+        ),
+      },
+    };
+    const usersRepo = {
+      findOne: jest.fn(() =>
+        Promise.resolve({ id: row.userId, role: ownerRole }),
+      ),
+    };
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
+    );
+    jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'fypAnnotate')
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    const notify = jest
+      .spyOn(service as any, 'notifyFypConnected')
+      .mockResolvedValue(undefined);
+    return { service, fypRepo, notify };
+  };
+
+  it('the owner certifies and publishes their own FYP: submitted + approved, no review loop', async () => {
+    const { service } = makeFacultyFypService(
+      {
+        id: 'fyp-f1',
+        userId: 'fac-1',
+        status: 'draft',
+        projectTitle: 'Solar desalination pilot',
+        supervisorApprovalStatus: 'pending',
+        projectInfo: {},
+      },
+      'faculty',
+    );
+    const out = (await service.selfCertifyOwnFyp('fac-1', 'fyp-f1')) as {
+      status: string;
+      supervisorApprovalStatus: string;
+      supervisorApprovalNote: string;
+      supervisorApprovalAt: Date;
+      isOwner: boolean;
+    };
+    expect(out.status).toBe('submitted');
+    expect(out.supervisorApprovalStatus).toBe('approved');
+    expect(out.supervisorApprovalNote).toBe('Faculty FYP — self-certified.');
+    expect(out.supervisorApprovalAt).toBeInstanceOf(Date);
+    expect(out.isOwner).toBe(true);
+  });
+
+  it('only the owner can certify, and only once the record has a title', async () => {
+    const { service } = makeFacultyFypService(
+      { id: 'fyp-f2', userId: 'fac-1', status: 'draft', projectInfo: {} },
+      'faculty',
+    );
+    await expect(
+      service.selfCertifyOwnFyp('fac-OTHER', 'fyp-f2'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.selfCertifyOwnFyp('fac-1', 'fyp-f2'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('a faculty owner naming a supervisor sends no "a student connected you" notices; a student owner still does', async () => {
+    const patch = {
+      projectInfo: {
+        supervisorName: 'Dr. Amna',
+        supervisorEmail: 'amna@uni.edu',
+      },
+    };
+    const faculty = makeFacultyFypService(
+      { id: 'fyp-f3', userId: 'fac-1', status: 'draft', projectInfo: {} },
+      'faculty',
+    );
+    await faculty.service.updateFypByIdForUser(
+      'fac-1',
+      'fyp-f3',
+      patch as never,
+    );
+    expect(faculty.notify).not.toHaveBeenCalled();
+
+    const student = makeFacultyFypService(
+      { id: 'fyp-s1', userId: 'stu-1', status: 'draft', projectInfo: {} },
+      'student',
+    );
+    await student.service.updateFypByIdForUser(
+      'stu-1',
+      'fyp-s1',
+      patch as never,
+    );
+    expect(student.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a faculty member's own FYP is never ranked against students in the merit model", async () => {
+    const { service } = makeFacultyFypService(
+      { id: 'x', userId: 'fac-1', projectInfo: {} },
+      'faculty',
+    );
+    jest
+      .spyOn(service as any, 'peekGraderRunUsage')
+      .mockResolvedValue({ used: 0, limit: 3 });
+    const approved = (id: string, role: string) => ({
+      id,
+      userId: `${role}-${id}`,
+      status: 'submitted',
+      supervisorApprovalStatus: 'approved',
+      projectTitle: `FYP ${id}`,
+      projectInfo: { supervisorEmail: 'fac@uni.edu' },
+      updatedAt: new Date('2026-11-20T00:00:00Z'),
+      student: { id: `${role}-${id}`, name: id, role },
+    });
+    jest
+      .spyOn(service, 'listFypForTeacher')
+      .mockResolvedValue([
+        approved('a', 'student'),
+        approved('b', 'faculty'),
+      ] as never);
+    const model = (await service.getFypMeritModel(
+      { role: 'faculty', email: 'fac@uni.edu' },
+      {} as never,
+    )) as { count: number; entries: Array<{ id?: string }> };
+    expect(model.count).toBe(1);
+  });
+});

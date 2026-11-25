@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -341,15 +342,16 @@ export class PathsController {
    * backward compatibility. */
   @Get('fyp-theses')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async listFyps(@Request() req: AuthenticatedRequest) {
+    // Faculty use the same deck for their OWN FYP records (self-certified, no review loop).
     const data = await this.pathsService.listFyps(req.user.id, req.user.email);
     return { success: true, data };
   }
 
   @Post('fyp-theses')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async createFyp(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.createFyp(req.user.id);
     return { success: true, data };
@@ -357,7 +359,7 @@ export class PathsController {
 
   @Get('fyp-theses/:id')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async getFypById(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
@@ -372,12 +374,22 @@ export class PathsController {
 
   @Patch('fyp-theses/:id')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async updateFypById(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateFypDto,
   ) {
+    // A faculty member's own FYP never enters a supervisor review queue: it is published with
+    // Certify & publish (self-certify), not by submitting.
+    if (
+      String(req.user.role) === String(UserRole.FACULTY) &&
+      dto.status === 'submitted'
+    ) {
+      throw new BadRequestException(
+        'A faculty FYP is published with "Certify & publish", not submitted for review.',
+      );
+    }
     const data = await this.pathsService.updateFypByIdForUser(
       req.user.id,
       id,
@@ -387,9 +399,21 @@ export class PathsController {
     return { success: true, data };
   }
 
+  /** Faculty FYP — the owner certifies and publishes their own record (no student review loop). */
+  @Post('fyp-theses/:id/self-certify')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async selfCertifyOwnFyp(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.pathsService.selfCertifyOwnFyp(req.user.id, id);
+    return { success: true, data };
+  }
+
   @Delete('fyp-theses/:id')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async deleteFypById(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
@@ -400,7 +424,7 @@ export class PathsController {
 
   @Post('fyp-theses/:id/deliverables')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async addFypDeliverableById(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
@@ -418,7 +442,7 @@ export class PathsController {
   /** Lead author removes an evidence file added by mistake (draft records only). */
   @Delete('fyp-theses/:id/deliverables/:version')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.STUDENT)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async removeFypDeliverableById(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,

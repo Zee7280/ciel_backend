@@ -2846,6 +2846,10 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
+    // A faculty member's own FYP is self-certified: no "a student connected you" notices.
+    if (justConnected && (await this.isFacultyOwnedFyp(saved))) {
+      justConnected = false;
+    }
     // Invite rows are written before responding (so the badge is accurate); emails go out in the background.
     await this.recordIds?.stampOnto('fyp', saved);
     await this.syncFypInvites(saved, saved.userId).catch((err) =>
@@ -2864,6 +2868,39 @@ export class PathsService implements OnModuleInit {
     return PathsService.redactFypAiAnalysisForStudent({
       ...annotated,
       isOwner: saved.userId === userId,
+    });
+  }
+
+  private async isFacultyOwnedFyp(entry: Pick<FypEntry, 'userId'>) {
+    const owner = await this.usersRepo.findOne({
+      where: { id: entry.userId },
+      select: ['id', 'role'],
+    });
+    return owner?.role === UserRole.FACULTY;
+  }
+
+  /** Faculty FYP track — the owner certifies their own record (no supervisor review loop), the
+   * same way a faculty founder self-certifies a venture. Only the owner, and only with a title. */
+  async selfCertifyOwnFyp(userId: string, id: string) {
+    const entry = await this.fypRepo.findOne({ where: { id } });
+    if (!entry || entry.userId !== userId) {
+      throw new NotFoundException('FYP entry not found');
+    }
+    if (!(entry.projectTitle || entry.projectInfo?.title || '').trim()) {
+      throw new BadRequestException(
+        'Add the project title (Step 1) before you certify this FYP.',
+      );
+    }
+    entry.status = 'submitted';
+    entry.supervisorApprovalStatus = 'approved';
+    entry.supervisorApprovalNote = 'Faculty FYP — self-certified.';
+    entry.supervisorApprovalAt = new Date();
+    const saved = await this.fypRepo.save(entry);
+    await this.recordIds?.stampOnto('fyp', saved);
+    const [annotated] = await this.fypAnnotate([saved]);
+    return PathsService.redactFypAiAnalysisForStudent({
+      ...annotated,
+      isOwner: true,
     });
   }
 
@@ -3531,8 +3568,11 @@ export class PathsService implements OnModuleInit {
     }
 
     // Eligibility gate — only supervisor-approved, submitted entries count toward the Merit Model.
+    // A faculty member's own (self-certified) FYP is never ranked against students.
     let eligible = pool.filter(
-      (e) => e.supervisorApprovalStatus === 'approved',
+      (e) =>
+        e.supervisorApprovalStatus === 'approved' &&
+        e.student?.role !== UserRole.FACULTY,
     );
 
     if (filters.route) {

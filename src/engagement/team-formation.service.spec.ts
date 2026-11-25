@@ -211,6 +211,30 @@ describe('TeamFormationService', () => {
       expect(mailService.sendTeamMemberAddedToProject).not.toHaveBeenCalled();
     });
 
+    it("a teammate seated under the lead's application id before the team formed is the lead's own team", async () => {
+      // The engagement API hands a team-less lead its application id (or seat id) as team id; the
+      // report seats teammates under it, then calls form-team. That is not "another team".
+      for (const seatedUnder of ['app-1', 'lead-1']) {
+        mockParticipationRepo.find.mockImplementation(
+          (opts: { where?: { id?: unknown } }) =>
+            Promise.resolve(
+              opts?.where && (opts.where as { id?: unknown }).id
+                ? [{ ...memberRow, teamId: seatedUnder }]
+                : [{ ...leadRow }, { ...memberRow, teamId: seatedUnder }],
+            ),
+        );
+        const result = await service.formTeamFromLead(
+          'student-lead',
+          'proj-1',
+          ['mem-1'],
+        );
+        // The team keeps that id so teammates seated earlier are not split off.
+        expect(result).toMatchObject({ formed: true, team_id: seatedUnder });
+        // Its own seated id is not counted as a second team on the project.
+        expect(result.team_display_name).toBe('Clean Water · Ali Team');
+      }
+    });
+
     it('emails a member only the first time they join the team', async () => {
       mockParticipationRepo.findOne.mockResolvedValue({
         ...leadRow,

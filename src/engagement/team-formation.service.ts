@@ -54,6 +54,29 @@ function memberDisplayName(row: Participation): string {
   ).trim();
 }
 
+/**
+ * The ids that mean "this lead's team": its own team id, and — before a team is formed — the
+ * application id / seat id the engagement API returns as the lead's team id (members seated from
+ * the report are registered under it).
+ */
+function leadOwnTeamIds(lead: Participation): Set<string> {
+  return new Set(
+    [lead.teamId, lead.applicationId, lead.id]
+      .map((id) => (id || '').trim())
+      .filter(Boolean),
+  );
+}
+
+/** A lead without a team id adopts the id its teammates were already seated under (if any). */
+function adoptedTeamId(lead: Participation, members: Participation[]): string {
+  const ids = leadOwnTeamIds(lead);
+  for (const m of members) {
+    const tid = (m.teamId || '').trim();
+    if (tid && ids.has(tid)) return tid;
+  }
+  return '';
+}
+
 @Injectable()
 export class TeamFormationService {
   constructor(
@@ -131,12 +154,15 @@ export class TeamFormationService {
         );
       }
       // A lead may not poach members of another team (or another team's lead): that would also
-      // delete their draft reports below.
-      const leadTeamId = (lead.teamId || '').trim();
+      // delete their draft reports below. A member seated by this lead before the team was formed
+      // carries the id the API handed out for the lead's team (its application id or seat id) —
+      // that is this lead's team, not another one.
+      const leadTeamIds = leadOwnTeamIds(lead);
       const taken = members.filter(
         (m) =>
           m.isTeamLead === true ||
-          ((m.teamId || '').trim() && (m.teamId || '').trim() !== leadTeamId),
+          ((m.teamId || '').trim() &&
+            !leadTeamIds.has((m.teamId || '').trim())),
       );
       if (taken.length) {
         throw new BadRequestException(
@@ -150,11 +176,13 @@ export class TeamFormationService {
       );
       const capError = teamCapacityError(members.length, seatCap);
       if (capError) throw new BadRequestException(capError);
-      const existingMembers = leadTeamId
+      const currentTeamId =
+        (lead.teamId || '').trim() || adoptedTeamId(lead, members);
+      const existingMembers = currentTeamId
         ? await this.participationRepo.count({
             where: {
               projectId,
-              teamId: leadTeamId,
+              teamId: currentTeamId,
               status: In([...ACTIVE_STATUSES]),
             },
           })
@@ -180,7 +208,9 @@ export class TeamFormationService {
     }
 
     const existingTeamId = (lead.teamId || '').trim();
-    const targetTeamId = existingTeamId || this.generateTeamId();
+    // Keep the id the lead's teammates were already seated under, so nobody is split off.
+    const adoptedId = existingTeamId ? '' : adoptedTeamId(lead, members);
+    const targetTeamId = existingTeamId || adoptedId || this.generateTeamId();
 
     const allProjectRows = await this.participationRepo.find({
       where: { projectId, status: In([...ACTIVE_STATUSES]) },
@@ -189,7 +219,14 @@ export class TeamFormationService {
 
     let teamSequence = 1;
     if (!existingTeamId) {
-      teamSequence = countDistinctTeamIdsOnProject(allProjectRows) + 1;
+      teamSequence =
+        countDistinctTeamIdsOnProject(
+          adoptedId
+            ? allProjectRows.filter(
+                (r) => (r.teamId || '').trim() !== adoptedId,
+              )
+            : allProjectRows,
+        ) + 1;
     }
 
     const displayName = buildTeamDisplayName(opportunity, lead, teamSequence);

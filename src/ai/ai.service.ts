@@ -161,9 +161,23 @@ type OpenAiChatResponse = {
  */
 export function isOpenAiQuotaExhausted(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
-  const e = error as { status?: unknown; code?: unknown };
-  return e.status === 429 && e.code === 'insufficient_quota';
+  const e = error as { status?: unknown; code?: unknown; message?: unknown };
+  if (e.status !== 429 && e.status !== 402) return false;
+  const code = typeof e.code === 'string' ? e.code.toLowerCase() : '';
+  if (OPENAI_NO_CREDIT_CODES.has(code)) return true;
+  // The prepaid-credit error ("You have no credits remaining. Add credits to continue using the
+  // API …") arrives without the insufficient_quota code, so the provider's text is checked too.
+  const message = typeof e.message === 'string' ? e.message : '';
+  return OPENAI_NO_CREDIT_MESSAGE.test(message);
 }
+
+const OPENAI_NO_CREDIT_CODES = new Set([
+  'insufficient_quota',
+  'billing_hard_limit_reached',
+  'billing_not_active',
+]);
+const OPENAI_NO_CREDIT_MESSAGE =
+  /no credits remaining|add credits to continue|exceeded your current quota|insufficient[_ ]quota|billing (hard )?limit|billing.*not active/i;
 
 /** What the student sees when the AI provider refused for quota / rate reasons. */
 export function openAiLimitHttpError(
@@ -2461,7 +2475,7 @@ SECTION_9_SUSTAINABILITY_AND_FOLLOWUP_FOCUS: ${JSON.stringify(input.sustainabili
         typeof error === 'object' && error !== null && 'status' in error
           ? (error as { status?: unknown }).status
           : undefined;
-      if (status === 429) {
+      if (status === 429 || isOpenAiQuotaExhausted(error)) {
         throw openAiLimitHttpError(
           error,
           'AI limit reached. Please wait a minute and try again.',
@@ -2602,7 +2616,7 @@ No evidence originals, filenames, captions or file metadata are attached to this
         typeof error === 'object' && error !== null && 'status' in error
           ? (error as { status?: unknown }).status
           : undefined;
-      if (status === 429) {
+      if (status === 429 || isOpenAiQuotaExhausted(error)) {
         throw openAiLimitHttpError(error, 'AI limit reached. Please wait.');
       }
       if (status === 503) {

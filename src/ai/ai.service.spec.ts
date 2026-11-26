@@ -753,6 +753,40 @@ describe('AiService — OpenAI 429: short rate limit vs. no credit left', () => 
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/quota exhausted/));
   });
 
+  it('the prepaid "no credits remaining" error (no insufficient_quota code) is the same no-credit case', async () => {
+    // Exactly what production OpenAI returns once the prepaid balance is used up.
+    const f = jest.fn().mockResolvedValue(
+      res(
+        429,
+        JSON.stringify({
+          error: {
+            message:
+              'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.',
+            type: 'invalid_request_error',
+            code: null,
+          },
+        }),
+      ),
+    );
+    global.fetch = f as never;
+    const svc = new AiService();
+    jest
+      .spyOn(
+        (svc as unknown as { logger: { error: () => void } }).logger,
+        'error',
+      )
+      .mockImplementation(() => {});
+    const err = (await draft(svc).catch((e: unknown) => e)) as {
+      getStatus: () => number;
+      getResponse: () => { error: string };
+    };
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(err.getStatus()).toBe(503);
+    expect(err.getResponse().error).toMatch(
+      /continue filling the form yourself/,
+    );
+  });
+
   it('a short rate limit is still retried and asks the student to wait a minute', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
     const f = jest

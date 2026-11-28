@@ -196,4 +196,37 @@ describe('participationScopeError (university + department)', () => {
       ),
     ).toBeNull();
   });
+
+  it('reported case: a "BS CS" listing accepts a Computer Science student (and still blocks others)', () => {
+    const bsCsOpp = {
+      ...deptOpp,
+      participation_scope: {
+        ...deptOpp.participation_scope,
+        department_restriction: { scope: 'specific', departments: ['BS CS'] },
+      },
+    };
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'Computer Science' },
+        bsCsOpp,
+        'MUHAMMAD RAHEEM',
+      ),
+    ).toBeNull();
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'BS Computer Science' },
+        bsCsOpp,
+        'MUHAMMAD RAHEEM',
+      ),
+    ).toBeNull();
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'Software Engineering' },
+        bsCsOpp,
+        'Sara',
+      ),
+    ).toBe(
+      'Sara is in Software Engineering, but this opportunity is open to BS CS students only.',
+    );
+  });
 });

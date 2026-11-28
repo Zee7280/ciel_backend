@@ -144,6 +144,22 @@ function foldAcademicUnitKey(value: string): string {
 }
 
 /**
+ * Short forms listings use for a programme ("BS CS", "BSCS") mapped to the department name a profile
+ * stores ("Computer Science"). Only unambiguous ones: "CE" (civil / computer engineering) is left out.
+ */
+const ACADEMIC_UNIT_ABBREVIATIONS: Record<string, string> = {
+  cs: 'computer science',
+  se: 'software engineering',
+  it: 'information technology',
+  ai: 'artificial intelligence',
+  ds: 'data science',
+  ee: 'electrical engineering',
+};
+/** "bscs", "bs cs", "mscs" … (folded keys) → the short form. */
+const COMPACT_DEGREE_ABBREVIATION =
+  /^(?:bs|ms|be|mphil|phd) ?(cs|se|it|ai|ds|ee)$/;
+
+/**
  * Every spelling under which one academic unit may be stored: the label itself, without a
  * "School of …" / "Institute of …" wrapper, without a degree prefix ("BS Computer Science" →
  * "Computer Science"), the BNU school a programme belongs to, and a trailing "(ABBR)".
@@ -180,6 +196,15 @@ export function academicUnitMatchKeys(
     g.programs.some((prog) => foldAcademicUnitKey(prog) === rawKey),
   );
   if (group) expand(group.school);
+  // "BS CS" / "BSCS" also answer to "Computer Science" (and the reverse, via the other side's keys).
+  for (const key of Array.from(forms)) {
+    const short = key.match(COMPACT_DEGREE_ABBREVIATION)?.[1] ?? key;
+    const full = ACADEMIC_UNIT_ABBREVIATIONS[short];
+    if (full) {
+      forms.add(short);
+      forms.add(full);
+    }
+  }
   return Array.from(forms);
 }
 

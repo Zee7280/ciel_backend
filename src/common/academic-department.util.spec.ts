@@ -105,6 +105,30 @@ describe('academicDepartmentsMatch (apply eligibility: profile programme vs list
     expect(academicDepartmentsMatch('Computer Science', '')).toBe(false);
     expect(academicDepartmentsMatch('', '')).toBe(false);
   });
+  it('reads programme short forms on a listing ("BS CS", "BSCS") as the full department', () => {
+    expect(academicDepartmentsMatch('BS CS', 'Computer Science')).toBe(true);
+    expect(academicDepartmentsMatch('BS CS', 'BS Computer Science')).toBe(true);
+    expect(academicDepartmentsMatch('BSCS', 'Computer Science')).toBe(true);
+    expect(academicDepartmentsMatch('Computer Science', 'BSCS')).toBe(true);
+    expect(academicDepartmentsMatch('BS SE', 'Software Engineering')).toBe(
+      true,
+    );
+    expect(academicDepartmentsMatch('BSIT', 'BS Information Technology')).toBe(
+      true,
+    );
+    expect(academicDepartmentsMatch('MS AI', 'Artificial Intelligence')).toBe(
+      true,
+    );
+  });
+  it('never lets a short form admit a different department', () => {
+    expect(academicDepartmentsMatch('BS CS', 'Software Engineering')).toBe(
+      false,
+    );
+    expect(academicDepartmentsMatch('BS SE', 'Computer Science')).toBe(false);
+    expect(academicDepartmentsMatch('BSIT', 'Computer Science')).toBe(false);
+    // "CE" is ambiguous (civil / computer engineering): not expanded.
+    expect(academicDepartmentsMatch('BS CE', 'Civil Engineering')).toBe(false);
+  });
   it('exposes stable keys', () => {
     expect(academicUnitMatchKeys('BS Computer Science')).toEqual(
       expect.arrayContaining([

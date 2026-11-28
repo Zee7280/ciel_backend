@@ -457,6 +457,18 @@ type NamedPartnerOrg = {
   isBlocked?: boolean;
 };
 
+/** An account's WhatsApp-able number: signup `countryCode` + `phone` (a number typed with + / 00 is kept). */
+function accountWhatsAppNumber(
+  u: { phone?: string | null; countryCode?: string | null } | null | undefined,
+): string | null {
+  const phone = String(u?.phone || '').trim();
+  if (!phone) return null;
+  const cc = String(u?.countryCode || '').trim();
+  return phone.startsWith('+') || phone.startsWith('00') || !cc
+    ? phone
+    : `${cc}${phone}`;
+}
+
 @Injectable()
 export class OpportunitiesService {
   constructor(
@@ -4628,13 +4640,8 @@ export class OpportunitiesService {
         const email = String(u?.email || '')
           .trim()
           .toLowerCase();
-        const phone = String(u?.phone || '').trim();
-        if (!email || !phone) continue;
-        const cc = String(u?.countryCode || '').trim();
-        const full =
-          phone.startsWith('+') || phone.startsWith('00') || !cc
-            ? phone
-            : `${cc}${phone}`;
+        const full = accountWhatsAppNumber(u);
+        if (!email || !full) continue;
         out.set(email, full);
       }
     } catch (error) {
@@ -5841,6 +5848,7 @@ export class OpportunitiesService {
               'name',
               'email',
               'phone',
+              'countryCode',
               'university',
               'institution',
               'department',
@@ -5904,6 +5912,13 @@ export class OpportunitiesService {
         flow_status,
         admin_can_approve,
         ...reviewerPhones(opp),
+        // CIEL PK (this queue is Super Admin only) can ask the student to chase a slow reviewer.
+        student_contact_phone:
+          opp.isStudentCreated && creator
+            ? accountWhatsAppNumber(creator)
+            : null,
+        student_contact_email:
+          opp.isStudentCreated && creator?.email ? creator.email : null,
         is_student_created: opp.isStudentCreated,
         organization: opp.organization || orgFallback,
         creator: creator

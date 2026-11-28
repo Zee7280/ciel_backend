@@ -169,4 +169,59 @@ describe('admin approval queue — CIEL PK can WhatsApp the faculty and partner 
     expect(rows[0].faculty_contact_phone).toBe('+9203001234567');
     expect(rows[0].partner_contact_phone).toBe('+92 340 5497821');
   });
+
+  it("the student's own WhatsApp (with country code) and email, so CIEL PK can ask them to chase the partner", async () => {
+    const { service } = makeHarness([], []);
+    const internals = service as unknown as {
+      participationRepository: Record<string, unknown>;
+      usersRepository: Record<string, unknown>;
+      mapOpportunitiesForAdminQueue: (
+        opps: Partial<Opportunity>[],
+      ) => Promise<Array<Record<string, unknown>>>;
+    };
+    internals.participationRepository.createQueryBuilder = jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    }));
+    const find = jest.fn().mockResolvedValue([
+      {
+        id: 'student-1',
+        name: 'Safa Mehmood',
+        email: 'safa@student.bnu.edu.pk',
+        phone: '3001112233',
+        countryCode: '+92',
+      },
+      {
+        id: 'faculty-9',
+        name: 'Faculty',
+        email: 'f@uni.edu',
+        phone: '3009998877',
+        countryCode: '+92',
+      },
+    ]);
+    internals.usersRepository.find = find;
+
+    const rows = await internals.mapOpportunitiesForAdminQueue([
+      studentOpp({ status: 'pending_partner', requiresPartnerApproval: true }),
+      studentOpp({
+        id: '44444444-4444-4444-8444-444444444444',
+        isStudentCreated: false,
+        creatorId: 'faculty-9',
+      }),
+    ]);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.arrayContaining(['phone', 'countryCode']) as unknown,
+      }),
+    );
+    expect(rows[0].student_contact_phone).toBe('+923001112233');
+    expect(rows[0].student_contact_email).toBe('safa@student.bnu.edu.pk');
+    // Not a student listing: no "student" contact.
+    expect(rows[1].student_contact_phone).toBeNull();
+    expect(rows[1].student_contact_email).toBeNull();
+  });
 });

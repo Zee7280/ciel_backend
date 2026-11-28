@@ -369,7 +369,12 @@ export class StudentReportsService {
     report.contribution_intent_statement =
       section3?.contribution_intent_statement as string;
 
-    if (report.contribution_intent_statement) {
+    // The wizard writes the SDG alignment statement (every registered + student-mapped goal); only
+    // fill it in when the client sent none.
+    if (
+      report.contribution_intent_statement &&
+      !String(report.section3?.summary_text ?? '').trim()
+    ) {
       report.section3.summary_text = this.generateSDGStage1Summary(report);
     }
   }

@@ -61,13 +61,23 @@ type OpenAiCompletionOpts = {
   reasoningEffort?: 'low' | 'medium' | 'high';
 };
 
-const DEFAULT_OPENAI_SUMMARY_MODEL = 'gpt-5.4';
+/**
+ * Student-facing helpers (section summaries, opportunity draft, follow-up questions) run on the
+ * mini model: short, frequent calls where cost and rate limits matter more than depth.
+ */
+const DEFAULT_OPENAI_SUMMARY_MODEL = 'gpt-5.4-mini';
+/** Faculty FYP grading keeps the full model, so scores do not shift because helpers got cheaper. */
+const DEFAULT_OPENAI_FYP_MODEL = 'gpt-5.4';
 const DEFAULT_OPENAI_CII_MODEL = 'gpt-5.6-sol';
 
 function resolveOpenAiSummaryModel(): string {
   return (
     process.env.OPENAI_SUMMARY_MODEL?.trim() || DEFAULT_OPENAI_SUMMARY_MODEL
   );
+}
+
+function resolveFypEvaluatorModel(): string {
+  return process.env.OPENAI_FYP_MODEL?.trim() || DEFAULT_OPENAI_FYP_MODEL;
 }
 
 function resolveCiiAnalyzerModel(): string {
@@ -119,6 +129,35 @@ export interface AiSummarizeResult {
   ciiV45?: CiiV45EvaluatorPayload;
   fypAi?: FypAiEvaluation;
   npeRanking?: NpeAiEvaluation;
+}
+
+/** Optional "what the rubric will read" summaries the student wizard writes on Next. */
+const STUDENT_SUMMARY_SECTIONS = new Set([
+  'section2',
+  'section3',
+  'section4',
+  'section5_summary',
+  'section6_summary',
+  'section7_summary',
+  'section8_summary',
+  'section9_summary',
+  'section10_summary',
+]);
+
+/** After OpenAI says the account has no credit, stop calling it for a while (no request can succeed). */
+const OPENAI_NO_CREDIT_PAUSE_MS = 5 * 60_000;
+/** Longest wait honoured from OpenAI's Retry-After before the single rate-limit retry. */
+const OPENAI_MAX_RETRY_AFTER_MS = 10_000;
+
+function retryAfterMsFrom(res: {
+  headers?: { get?: (name: string) => string | null };
+}): number {
+  const get = (name: string) => res.headers?.get?.(name) ?? null;
+  const ms = Number(get('retry-after-ms'));
+  if (Number.isFinite(ms) && ms > 0) return ms;
+  const seconds = Number(get('retry-after'));
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+  return 0;
 }
 
 const ADMIN_EVAL_SECTIONS = new Set([
@@ -701,6 +740,8 @@ function slimCiiPayloadForModel(data: unknown): unknown {
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
+  /** Until when OpenAI is known to have no credit (see OPENAI_NO_CREDIT_PAUSE_MS). */
+  private openAiNoCreditUntil = 0;
 
   constructor(@Optional() private readonly s3Service?: S3Service) {
     // Surfaces a missing key at boot, in the server log, instead of only as a 500 toast the
@@ -947,6 +988,16 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
       throw new Error('OPENAI_API_KEY missing');
     }
 
+    if (Date.now() < this.openAiNoCreditUntil) {
+      // Every call fails the same way until billing is topped up — answer without calling OpenAI.
+      const paused = new Error(
+        'OpenAI has no credits remaining (AI calls are paused for a few minutes).',
+      ) as Error & { status?: number; code?: string };
+      paused.status = 429;
+      paused.code = 'insufficient_quota';
+      throw paused;
+    }
+
     const model = opts?.model?.trim() || resolveOpenAiSummaryModel();
     const reasoningModel = isOpenAiReasoningModel(model);
 
@@ -994,6 +1045,7 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
     let responseJson: OpenAiChatResponse = {};
     let lastError: (Error & { status?: number }) | null = null;
     let didEmptyRetry = false;
+    let retryAfterMs = 0;
     for (
       let attempt = 1;
       attempt <= maxAttempts + extraEmptyAttempt;
@@ -1063,10 +1115,12 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
           responseJson.error?.code || responseJson.error?.type || undefined;
         lastError = err;
         if (isOpenAiQuotaExhausted(err)) {
+          this.openAiNoCreditUntil = Date.now() + OPENAI_NO_CREDIT_PAUSE_MS;
           this.logger.error(
-            'OpenAI quota exhausted (insufficient_quota): AI features fail until the OpenAI account is topped up.',
+            'OpenAI quota exhausted (insufficient_quota): AI features fail until the OpenAI account is topped up. AI calls are paused for 5 minutes.',
           );
         }
+        retryAfterMs = res.status === 429 ? retryAfterMsFrom(res) : 0;
         const retryable =
           (res.status === 429 && !isOpenAiQuotaExhausted(err)) ||
           res.status >= 500;
@@ -1094,7 +1148,12 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
       this.logger.warn(
         `OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`,
       );
-      await new Promise((r) => setTimeout(r, 1500 * attempt));
+      // A real rate limit says how long to wait; otherwise back off briefly.
+      const waitMs = retryAfterMs
+        ? Math.min(Math.max(retryAfterMs, 1000), OPENAI_MAX_RETRY_AFTER_MS)
+        : 1500 * attempt;
+      retryAfterMs = 0;
+      await new Promise((r) => setTimeout(r, waitMs));
     }
 
     const text = extractOpenAiMessageText(responseJson);
@@ -2569,6 +2628,7 @@ SECTION_9_SUSTAINABILITY_AND_FOLLOWUP_FOCUS: ${JSON.stringify(input.sustainabili
         }
       : isFypAiEvaluationSection
         ? {
+            model: resolveFypEvaluatorModel(),
             temperature: 0.15,
             seed: 4230,
             maxTokens: 16000,
@@ -2588,7 +2648,9 @@ SECTION_9_SUSTAINABILITY_AND_FOLLOWUP_FOCUS: ${JSON.stringify(input.sustainabili
               maxAttempts: 1,
               retryEmptyOnce: true,
             }
-          : undefined;
+          : STUDENT_SUMMARY_SECTIONS.has(section)
+            ? { reasoningEffort: 'low' }
+            : undefined;
 
     // CII v5.0 Hybrid: report-quality only. Evidence originals stay with Admin Dimension 7.
     // NPE ranking reads originals when they can be loaded; unread files are flagged, not guessed.
@@ -2616,6 +2678,13 @@ No evidence originals, filenames, captions or file metadata are attached to this
         typeof error === 'object' && error !== null && 'status' in error
           ? (error as { status?: unknown }).status
           : undefined;
+      if (
+        STUDENT_SUMMARY_SECTIONS.has(section) &&
+        isOpenAiQuotaExhausted(error)
+      ) {
+        // Optional wizard summaries: the step still saves; no warning toast for a billing problem.
+        return { summary: '', skipped: true };
+      }
       if (status === 429 || isOpenAiQuotaExhausted(error)) {
         throw openAiLimitHttpError(error, 'AI limit reached. Please wait.');
       }

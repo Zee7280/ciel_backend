@@ -64,7 +64,7 @@ describe('AiService — OpenAI transport hardening', () => {
     await run(new AiService());
     expect(f.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     const sent = sentBody(f);
-    expect(sent.model).toBe('gpt-5.4');
+    expect(sent.model).toBe('gpt-5.4-mini');
     expect(sent.reasoning_effort).toBeUndefined();
     expect(sent.response_format).toBeUndefined();
   });
@@ -804,5 +804,149 @@ describe('AiService — OpenAI 429: short rate limit vs. no credit left', () => 
     expect(err.getResponse().error).toBe(
       'AI limit reached. Please wait a minute and try again.',
     );
+  });
+});
+
+describe('AiService — mini model, no-credit pause and Retry-After', () => {
+  const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  const realSummaryModel = process.env.OPENAI_SUMMARY_MODEL;
+  const realFypModel = process.env.OPENAI_FYP_MODEL;
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    delete process.env.OPENAI_SUMMARY_MODEL;
+    delete process.env.OPENAI_FYP_MODEL;
+  });
+  afterEach(() => {
+    global.fetch = realFetch;
+    process.env.OPENAI_API_KEY = realKey;
+    if (realSummaryModel === undefined) delete process.env.OPENAI_SUMMARY_MODEL;
+    else process.env.OPENAI_SUMMARY_MODEL = realSummaryModel;
+    if (realFypModel === undefined) delete process.env.OPENAI_FYP_MODEL;
+    else process.env.OPENAI_FYP_MODEL = realFypModel;
+    jest.useRealTimers();
+  });
+  const noCredit = () =>
+    res(
+      429,
+      JSON.stringify({
+        error: {
+          message:
+            'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.',
+          type: 'invalid_request_error',
+          code: null,
+        },
+      }),
+    );
+  const quietLogger = (svc: AiService) =>
+    jest
+      .spyOn(
+        (svc as unknown as { logger: { error: () => void } }).logger,
+        'error',
+      )
+      .mockImplementation(() => {});
+
+  it('student section summaries and the opportunity draft run on the mini model with low reasoning', async () => {
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section5_summary', { x: 1 });
+    expect(sentBody(f).model).toBe('gpt-5.4-mini');
+    expect(sentBody(f).reasoning_effort).toBe('low');
+
+    f.mockResolvedValue(
+      res(
+        200,
+        JSON.stringify({
+          choices: [
+            { message: { content: JSON.stringify({ title: 'Tree drive' }) } },
+          ],
+        }),
+      ),
+    );
+    await new AiService()
+      .generateOpportunityDraft({ idea: 'tree plantation' })
+      .catch(() => undefined);
+    expect(sentBody(f, 1).model).toBe('gpt-5.4-mini');
+  });
+
+  it('OPENAI_SUMMARY_MODEL still overrides the helper model without a code change', async () => {
+    process.env.OPENAI_SUMMARY_MODEL = 'gpt-5.4';
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService().summarize('section5_summary', { x: 1 });
+    expect(sentBody(f).model).toBe('gpt-5.4');
+  });
+
+  it('faculty FYP grading keeps the full model (scores do not change with the cheaper helpers)', async () => {
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    await new AiService()
+      .summarize('fyp_ai_evaluation', {})
+      .catch(() => undefined);
+    expect(sentBody(f).model).toBe('gpt-5.4');
+  });
+
+  it('no credit: the student summary is skipped quietly and OpenAI is not called again for a while', async () => {
+    const f = jest.fn().mockResolvedValue(noCredit());
+    global.fetch = f as never;
+    const svc = new AiService();
+    quietLogger(svc);
+    await expect(svc.summarize('section8_summary', { x: 1 })).resolves.toEqual({
+      summary: '',
+      skipped: true,
+    });
+    expect(f).toHaveBeenCalledTimes(1);
+
+    // Next student step and an opportunity draft: answered without another OpenAI request.
+    await expect(svc.summarize('section9_summary', { x: 1 })).resolves.toEqual({
+      summary: '',
+      skipped: true,
+    });
+    const err = (await svc
+      .generateOpportunityDraft({ idea: 'tree plantation' })
+      .catch((e: unknown) => e)) as { getStatus: () => number };
+    expect(err.getStatus()).toBe(503);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('the no-credit pause ends after 5 minutes', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    const f = jest
+      .fn()
+      .mockResolvedValueOnce(noCredit())
+      .mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    const svc = new AiService();
+    quietLogger(svc);
+    await svc.summarize('section8_summary', { x: 1 });
+    jest.setSystemTime(Date.now() + 5 * 60_000 + 1);
+    await expect(
+      svc.summarize('section8_summary', { x: 1 }),
+    ).resolves.toMatchObject({ summary: 'Plain summary text' });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('a real rate limit is retried after the Retry-After OpenAI sends', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    const limited = {
+      ...res(
+        429,
+        JSON.stringify({
+          error: { message: 'Rate limit reached', code: 'rate_limit_exceeded' },
+        }),
+      ),
+      headers: { get: (name: string) => (name === 'retry-after' ? '4' : null) },
+    };
+    const f = jest
+      .fn()
+      .mockResolvedValueOnce(limited)
+      .mockResolvedValue(res(200, OK_BODY));
+    global.fetch = f as never;
+    const p = new AiService().summarize('section5_summary', { x: 1 });
+    await jest.advanceTimersByTimeAsync(3000);
+    expect(f).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1500);
+    await expect(p).resolves.toMatchObject({ summary: 'Plain summary text' });
+    expect(f).toHaveBeenCalledTimes(2);
   });
 });
